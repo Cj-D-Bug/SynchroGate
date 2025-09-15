@@ -1,20 +1,29 @@
 // syncService.js - Offline data synchronization
-import { Attendance } from '../models/mysql/Attendance.js';
-import { ArduinoEvent } from '../models/mongo/ArduinoEvent.js';
+const { firestore } = require('../config/firebase');
 
-export const syncOfflineData = async (offlineEvents) => {
+exports.syncOfflineData = async (offlineEvents) => {
   try {
+    const batch = firestore.batch();
+    
     for (let event of offlineEvents) {
-      // Save raw event to MongoDB for audit
-      await ArduinoEvent.create(event);
+      // Save raw event to Firebase for audit
+      const arduinoEventRef = firestore.collection('arduinoEvents').doc();
+      batch.set(arduinoEventRef, {
+        ...event,
+        createdAt: new Date()
+      });
 
-      // Sync to MySQL Attendance if valid
-      await Attendance.create({
+      // Sync to Firebase Attendance if valid
+      const attendanceRef = firestore.collection('attendance').doc();
+      batch.set(attendanceRef, {
         studentId: event.studentId,
         status: event.status,
-        timestamp: event.timestamp
+        timestamp: event.timestamp,
+        createdAt: new Date()
       });
     }
+    
+    await batch.commit();
     return { success: true, count: offlineEvents.length };
   } catch (err) {
     console.error('Offline sync failed:', err);

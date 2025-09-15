@@ -1,8 +1,8 @@
-import Notification from "../models/mongo/Notification.js";
-import smsService from "../services/smsService.js";
-import pushService from "../services/pushService.js";
+const { firestore } = require("../config/firebase");
+const smsService = require("../services/smsService");
+const pushService = require("../services/pushService");
 
-export const sendSMS = async (req, res, next) => {
+exports.sendSMS = async (req, res, next) => {
   const { phones, message } = req.body; // support array of phone numbers or single string
   try {
     // Normalize phones to array
@@ -11,15 +11,23 @@ export const sendSMS = async (req, res, next) => {
     // Send SMS to all recipients
     await Promise.all(recipients.map(phone => smsService.sendSMS(phone, message)));
 
-    // Log notifications in MongoDB
-    await Notification.insertMany(
-      recipients.map(phone => ({
+    // Log notifications in Firebase
+    const notificationsRef = firestore.collection('notifications');
+    const batch = firestore.batch();
+    
+    recipients.forEach(phone => {
+      const notificationRef = notificationsRef.doc();
+      batch.set(notificationRef, {
         type: "SMS",
         recipient: phone,
         message,
+        status: "sent",
         sentAt: new Date(),
-      }))
-    );
+        createdAt: new Date()
+      });
+    });
+    
+    await batch.commit();
 
     res.status(200).json({ message: "SMS sent successfully." });
   } catch (error) {
@@ -27,7 +35,7 @@ export const sendSMS = async (req, res, next) => {
   }
 };
 
-export const sendPush = async (req, res, next) => {
+exports.sendPush = async (req, res, next) => {
   const { tokens, title, body } = req.body; // support array of tokens or single string
   try {
     // Normalize tokens to array
@@ -36,16 +44,24 @@ export const sendPush = async (req, res, next) => {
     // Send push to all recipients
     await Promise.all(recipients.map(token => pushService.sendPush(token, title, body)));
 
-    // Log notifications in MongoDB
-    await Notification.insertMany(
-      recipients.map(token => ({
+    // Log notifications in Firebase
+    const notificationsRef = firestore.collection('notifications');
+    const batch = firestore.batch();
+    
+    recipients.forEach(token => {
+      const notificationRef = notificationsRef.doc();
+      batch.set(notificationRef, {
         type: "PUSH",
         recipient: token,
         message: body,
         title,
+        status: "sent",
         sentAt: new Date(),
-      }))
-    );
+        createdAt: new Date()
+      });
+    });
+    
+    await batch.commit();
 
     res.status(200).json({ message: "Push notification sent successfully." });
   } catch (error) {

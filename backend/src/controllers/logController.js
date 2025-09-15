@@ -1,9 +1,16 @@
-const SystemLog = require("../models/mongo/SystemLog");
-const ArduinoEvent = require("../models/mongo/ArduinoEvent");
+const { firestore } = require("../config/firebase");
 
 exports.getLogs = async (req, res) => {
   try {
-    const logs = await SystemLog.find().sort({ createdAt: -1 });
+    const logsSnapshot = await firestore.collection('systemLogs')
+      .orderBy('createdAt', 'desc')
+      .get();
+    
+    const logs = [];
+    logsSnapshot.forEach(doc => {
+      logs.push({ id: doc.id, ...doc.data() });
+    });
+    
     res.json(logs);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -12,7 +19,15 @@ exports.getLogs = async (req, res) => {
 
 exports.getArduinoEvents = async (req, res) => {
   try {
-    const events = await ArduinoEvent.find().sort({ createdAt: -1 });
+    const eventsSnapshot = await firestore.collection('arduinoEvents')
+      .orderBy('createdAt', 'desc')
+      .get();
+    
+    const events = [];
+    eventsSnapshot.forEach(doc => {
+      events.push({ id: doc.id, ...doc.data() });
+    });
+    
     res.json(events);
   } catch (err) {
     res.status(500).json({ error: err.message });

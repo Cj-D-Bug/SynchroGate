@@ -1,11 +1,21 @@
-import { User } from '../models/mysql/User.js';
-import { generateQRCodeImage } from '../utils/generateQR.js';
+const { firestore } = require('../config/firebase');
+const { generateQRCodeImage } = require('../utils/generateQR');
 
-export const getUsers = async (req, res) => {
+exports.getUsers = async (req, res) => {
   try {
-    const users = await User.findAll({
-      attributes: ['id', 'name', 'email', 'role'], // select needed fields only
+    const usersSnapshot = await firestore.collection('users').get();
+    const users = [];
+    
+    usersSnapshot.forEach(doc => {
+      const userData = doc.data();
+      users.push({
+        id: doc.id,
+        name: userData.firstName + ' ' + userData.lastName,
+        email: userData.email,
+        role: userData.role
+      });
     });
+    
     res.json(users);
   } catch (err) {
     console.error('Error fetching users:', err);
@@ -13,15 +23,30 @@ export const getUsers = async (req, res) => {
   }
 };
 
-export const generateQRForUser = async (req, res) => {
+exports.generateQRForUser = async (req, res) => {
   try {
     const userId = req.params.id;
     if (!userId) {
       return res.status(400).json({ error: 'User ID is required' });
     }
 
-    // Assuming generateQRCodeImage accepts userId or data to generate QR code image URL/base64
-    const qr = await generateQRCodeImage({ userId });
+    // Get user data from Firebase
+    const userDoc = await firestore.collection('users').doc(userId).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const userData = userDoc.data();
+    if (userData.role !== 'student') {
+      return res.status(400).json({ error: 'QR codes can only be generated for students' });
+    }
+
+    // Generate QR code for the student
+    const qr = await generateQRCodeImage({ 
+      userId,
+      studentId: userData.studentId,
+      name: userData.firstName + ' ' + userData.lastName
+    });
 
     res.json({ qr });
   } catch (err) {

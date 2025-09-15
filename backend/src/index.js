@@ -3,8 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
 
-const sequelize = require('./config/mysql').default; // Ensure default import
-const connectMongoDB = require('./config/mongo');
+// Firebase configuration
+const { admin } = require('./config/firebase');
 
 // Import route modules
 const authRoutes = require('./routes/authRoutes');
@@ -64,11 +64,8 @@ const PORT = process.env.PORT || 8000;
 
 async function startServer() {
   try {
-    await sequelize.authenticate();
-    console.log('✅ MySQL connected');
-
-    await connectMongoDB();
-    console.log('✅ MongoDB connected');
+    // Firebase is already initialized in config/firebase.js
+    console.log('✅ Firebase connected');
 
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Server running on port ${PORT}`);

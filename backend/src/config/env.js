@@ -18,14 +18,9 @@ export const env = {
   NODE_ENV: process.env.NODE_ENV || "development",
   PORT: process.env.PORT || 8000,
 
-  MYSQL_HOST: process.env.MYSQL_HOST || "localhost",
-  MYSQL_PORT: process.env.MYSQL_PORT || 3306,
-  MYSQL_DB: process.env.MYSQL_DB || "guardientry",
-  MYSQL_USER: process.env.MYSQL_USER || "root",
-  MYSQL_PASS: process.env.MYSQL_PASS || "",
-  MYSQL_DIALECT: "mysql",
-
-  MONGO_URI: required("MONGO_URI"),
+  // Firebase configuration
+  FIREBASE_SERVICE_ACCOUNT_JSON: required("FIREBASE_SERVICE_ACCOUNT_JSON"),
+  FIREBASE_DATABASE_URL: required("FIREBASE_DATABASE_URL"),
 
   JWT_SECRET: required("JWT_SECRET"),
   JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || "7d",
