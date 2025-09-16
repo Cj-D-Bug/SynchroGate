@@ -1,0 +1,62 @@
+# Dependencies
+node_modules/
+**/node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+ECHO is on.
+# Logs
+logs/
+**/*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+ECHO is on.
+# Build outputs
+dist/
+build/
+android/app/build/
+ios/build/
+.expo/
+.expo-shared/
+expo-web/
+web-build/
+.parcel-cache/
+.turbo/
+ECHO is on.
+# React Native / Expo caches
+.gradle/
+.DS_Store
+.vscode/
+.idea/
+*.iml
+ECHO is on.
+# Env and secrets
+.env
+.env.*
+**/.env
+**/.env.*
+*.keystore
+*.jks
+google-services.json
+GoogleService-Info.plist
+ECHO is on.
+# Firebase local emulators
+firebase-debug.log
+ECHO is on.
+# OS files
+Thumbs.db
+ehthumbs.db
+ECHO is on.
+# Misc
+.cache/
+coverage/
+.nyc_output/
+.eslintcache
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+ECHO is on.
+# Lock Firebase rule debug artifacts
+frontend/debug-*.json
