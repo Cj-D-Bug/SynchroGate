@@ -5,7 +5,8 @@
   "main": "src/index.js",
   "scripts": {
     "dev": "nodemon --watch src --exec node ./src/index.js",
-    "start": "node ./src/index.js"
+    "start": "node ./src/index.js",
+    "create-admin": "node ./scripts/createAdminUser.js"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",

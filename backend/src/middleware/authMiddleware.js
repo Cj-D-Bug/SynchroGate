@@ -34,10 +34,21 @@ module.exports = async function authMiddleware(req, res, next) {
     // Verify token via Firebase Admin
     const decodedToken = await admin.auth().verifyIdToken(token);
 
+    // Fetch user profile to determine role
+    const db = admin.firestore();
+    let role = 'student';
+    try {
+      const users = await db.collection('users').where('uid', '==', decodedToken.uid).limit(1).get();
+      if (!users.empty) {
+        const data = users.docs[0].data();
+        if (data && typeof data.role === 'string') role = data.role.toLowerCase();
+      }
+    } catch {}
+
     req.user = {
       uid: decodedToken.uid,
       email: decodedToken.email,
-      role: decodedToken.role || "student", // default role if not set
+      role,
     };
 
     next();

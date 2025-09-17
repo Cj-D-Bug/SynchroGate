@@ -17,4 +17,7 @@ router.get('/linked/:parentId', auth, role(['parent']), studentController.getLin
 // New route: generate QR code (admin only)
 router.post('/generate-qr', auth, role(['admin']), studentController.generateStudentQRCode);
 
+// Bulk generate QR codes (admin only)
+router.post('/bulk-generate-qr', auth, role(['admin']), studentController.bulkGenerateStudentQRCodes);
+
 module.exports = router;
