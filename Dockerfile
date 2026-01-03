@@ -1,24 +1,19 @@
 # Use Node.js 18
 FROM node:18-alpine
 
-# Set working directory
-WORKDIR /app
-
-# Copy package files
-COPY backend/package*.json ./backend/
-
-# Install dependencies
+# Set working directory to backend
 WORKDIR /app/backend
+
+# Copy package files first (for better caching)
+COPY backend/package*.json ./
+
+# Install ALL dependencies (including devDependencies)
 RUN npm install --production=false
 
-# Copy backend source code
-WORKDIR /app
-COPY backend ./backend
+# Copy the rest of the backend source code
+COPY backend/ ./
 
-# Set working directory back to backend
-WORKDIR /app/backend
-
-# Expose port (adjust if needed)
+# Expose port (adjust if your app uses a different port)
 EXPOSE 3000
 
 # Start the application
