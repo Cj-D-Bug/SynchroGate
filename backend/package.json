@@ -1,7 +1,6 @@
 {
   "name": "guardientry-backend",
   "version": "1.0.0",
-  "type": "module",
   "main": "src/index.js",
   "scripts": {
     "dev": "nodemon --watch src --exec node ./src/index.js",

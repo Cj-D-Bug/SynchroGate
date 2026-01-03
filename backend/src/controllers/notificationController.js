@@ -2,7 +2,7 @@ const { firestore } = require("../config/firebase");
 const smsService = require("../services/smsService");
 const pushService = require("../services/pushService");
 
-exports.sendSMS = async (req, res, next) => {
+const sendSMSNotification = async (req, res, next) => {
   const { phones, message } = req.body; // support array of phone numbers or single string
   try {
     // Normalize phones to array
@@ -35,7 +35,7 @@ exports.sendSMS = async (req, res, next) => {
   }
 };
 
-exports.sendPush = async (req, res, next) => {
+const sendPushNotification = async (req, res, next) => {
   const { tokens, title, body } = req.body; // support array of tokens or single string
   try {
     // Normalize tokens to array
@@ -67,4 +67,74 @@ exports.sendPush = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+};
+
+// Add placeholder methods for other routes if needed
+const getNotificationHistory = async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+    const notificationsRef = firestore.collection('notifications');
+    const snapshot = await notificationsRef
+      .where('userId', '==', userId)
+      .orderBy('sentAt', 'desc')
+      .get();
+    
+    const notifications = [];
+    snapshot.forEach(doc => {
+      notifications.push({ id: doc.id, ...doc.data() });
+    });
+    
+    res.json(notifications);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getParentNotifications = async (req, res, next) => {
+  try {
+    const userId = req.user.uid; // Assuming user ID from auth middleware
+    const notificationsRef = firestore.collection('notifications');
+    const snapshot = await notificationsRef
+      .where('userId', '==', userId)
+      .orderBy('sentAt', 'desc')
+      .limit(50)
+      .get();
+    
+    const notifications = [];
+    snapshot.forEach(doc => {
+      notifications.push({ id: doc.id, ...doc.data() });
+    });
+    
+    res.json(notifications);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const logNotificationEvent = async (req, res, next) => {
+  try {
+    const { type, recipient, message, title } = req.body;
+    const notificationsRef = firestore.collection('notifications');
+    await notificationsRef.add({
+      type,
+      recipient,
+      message,
+      title,
+      status: 'logged',
+      createdAt: new Date(),
+      sentAt: new Date()
+    });
+    
+    res.status(201).json({ message: "Notification event logged successfully." });
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = {
+  sendSMSNotification,
+  sendPushNotification,
+  getNotificationHistory,
+  getParentNotifications,
+  logNotificationEvent
 };

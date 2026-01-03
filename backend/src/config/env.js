@@ -1,9 +1,5 @@
-import dotenv from "dotenv";
-import path from "path";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const dotenv = require("dotenv");
+const path = require("path");
 
 dotenv.config({ path: path.join(__dirname, "../../.env") });
 
@@ -14,7 +10,7 @@ function required(name) {
   return process.env[name];
 }
 
-export const env = {
+const env = {
   NODE_ENV: process.env.NODE_ENV || "development",
   PORT: process.env.PORT || 8000,
 
@@ -33,3 +29,5 @@ export const env = {
 
   APP_BASE_URL: process.env.APP_BASE_URL || "http://localhost:8000",
 };
+
+module.exports = { env };

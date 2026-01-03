@@ -1,6 +1,6 @@
 // smsService.js - Send SMS notifications using Twilio or Semaphore
-import dotenv from 'dotenv';
-import twilio from 'twilio';
+const dotenv = require('dotenv');
+const twilio = require('twilio');
 dotenv.config();
 
 const useTwilio = process.env.SMS_PROVIDER === 'twilio';
@@ -10,7 +10,7 @@ if (useTwilio) {
   twilioClient = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH_TOKEN);
 }
 
-export const sendSMS = async (to, message) => {
+const sendSMS = async (to, message) => {
   try {
     if (useTwilio) {
       const result = await twilioClient.messages.create({
@@ -38,3 +38,5 @@ export const sendSMS = async (to, message) => {
     throw new Error('Failed to send SMS');
   }
 };
+
+module.exports = { sendSMS };

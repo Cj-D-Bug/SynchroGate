@@ -1,8 +1,8 @@
 // src/routes/notificationRoutes.js
-import express from 'express';
-import notificationController from '../controllers/notificationController.js';
-import authMiddleware from '../middleware/authMiddleware.js';
-import roleMiddleware from '../middleware/roleMiddleware.js';
+const express = require('express');
+const notificationController = require('../controllers/notificationController');
+const authMiddleware = require('../middleware/authMiddleware');
+const roleMiddleware = require('../middleware/roleMiddleware');
 
 const router = express.Router();
 
@@ -46,4 +46,4 @@ router.post(
   notificationController.logNotificationEvent
 );
 
-export default router;
+module.exports = router;

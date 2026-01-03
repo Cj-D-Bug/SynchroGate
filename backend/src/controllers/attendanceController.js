@@ -1,9 +1,9 @@
 // src/controllers/attendanceController.js
-import { firestore } from '../config/firebase.js'; // your Firebase admin SDK import
+const { firestore } = require('../config/firebase'); // your Firebase admin SDK import
 
 const attendanceCollection = firestore.collection('attendance');
 
-export const checkIn = async (req, res) => {
+const checkIn = async (req, res) => {
   try {
     const { studentId } = req.body;
     if (!studentId) {
@@ -25,7 +25,7 @@ export const checkIn = async (req, res) => {
   }
 };
 
-export const checkOut = async (req, res) => {
+const checkOut = async (req, res) => {
   try {
     const { studentId } = req.body;
     if (!studentId) {
@@ -47,7 +47,7 @@ export const checkOut = async (req, res) => {
   }
 };
 
-export const getLogs = async (req, res) => {
+const getLogs = async (req, res) => {
   try {
     const { studentId } = req.params;
     if (!studentId) {
@@ -70,3 +70,5 @@ export const getLogs = async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch attendance logs' });
   }
 };
+
+module.exports = { checkIn, checkOut, getLogs };

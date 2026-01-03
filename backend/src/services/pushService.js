@@ -1,7 +1,7 @@
 // pushService.js - Send push notifications using Expo Push API
-import fetch from 'node-fetch';
+const fetch = require('node-fetch');
 
-export const sendPushNotification = async (expoPushToken, title, body, data = {}) => {
+const sendPushNotification = async (expoPushToken, title, body, data = {}) => {
   try {
     const response = await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
@@ -25,3 +25,8 @@ export const sendPushNotification = async (expoPushToken, title, body, data = {}
     throw new Error('Failed to send push notification');
   }
 };
+
+// Alias for backward compatibility
+const sendPush = sendPushNotification;
+
+module.exports = { sendPushNotification, sendPush };

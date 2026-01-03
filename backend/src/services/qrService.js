@@ -1,7 +1,7 @@
 // qrService.js - Generate and validate QR codes
-import QRCode from 'qrcode';
+const QRCode = require('qrcode');
 
-export const generateQRCode = async (text) => {
+const generateQRCode = async (text) => {
   try {
     return await QRCode.toDataURL(text);
   } catch (err) {
@@ -10,6 +10,8 @@ export const generateQRCode = async (text) => {
   }
 };
 
-export const validateQRCode = (scannedData, expectedData) => {
+const validateQRCode = (scannedData, expectedData) => {
   return scannedData === expectedData;
 };
+
+module.exports = { generateQRCode, validateQRCode };
