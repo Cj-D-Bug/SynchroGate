@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "description": "SyncroGate - Backend API",
   "scripts": {
-    "start": "cd backend && npm start",
-    "postinstall": "cd backend && npm install"
+    "preinstall": "cd backend && npm install",
+    "start": "cd backend && npm start"
   },
   "engines": {
     "node": ">=18.0.0",
