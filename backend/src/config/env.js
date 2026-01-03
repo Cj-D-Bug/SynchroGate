@@ -5,6 +5,8 @@ dotenv.config({ path: path.join(__dirname, "../../.env") });
 
 function required(name) {
   if (!process.env[name]) {
+    console.error(`❌ Missing required environment variable: ${name}`);
+    console.error('Please set this variable in Railway dashboard → Variables');
     throw new Error(`Missing required env var: ${name}`);
   }
   return process.env[name];

@@ -3,8 +3,17 @@ const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
 
-// Firebase configuration
-const { admin } = require('./config/firebase');
+// Firebase configuration - wrap in try-catch to handle missing env vars
+let admin;
+try {
+  const firebaseConfig = require('./config/firebase');
+  admin = firebaseConfig.admin;
+  console.log('✅ Firebase module loaded');
+} catch (error) {
+  console.error('❌ Failed to load Firebase config:', error.message);
+  console.error('Stack:', error.stack);
+  process.exit(1);
+}
 
 // Import route modules
 const authRoutes = require('./routes/authRoutes');
@@ -64,14 +73,21 @@ const PORT = process.env.PORT || 8000;
 
 async function startServer() {
   try {
+    console.log('🔄 Starting server...');
+    console.log(`📍 Port: ${PORT}`);
+    console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    
     // Firebase is already initialized in config/firebase.js
     console.log('✅ Firebase connected');
 
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`🌐 Health check: http://0.0.0.0:${PORT}/`);
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error);
+    console.error('Error details:', error.message);
+    console.error('Stack:', error.stack);
     process.exit(1);
   }
 }
