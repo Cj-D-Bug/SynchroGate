@@ -1,0 +1,14 @@
+{
+  "name": "syncrogate",
+  "version": "1.0.0",
+  "description": "SyncroGate - Backend API",
+  "scripts": {
+    "start": "cd backend && npm start",
+    "install": "cd backend && npm install"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}
+
