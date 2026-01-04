@@ -128,10 +128,25 @@ export const initializeGlobalPushNotifications = async (user) => {
           const unreadAlerts = items.filter(item => item.status === 'unread');
           
           // Send push notifications for new unread alerts only
+          const now = Date.now();
+          const FIVE_MINUTES = 5 * 60 * 1000;
+          
           for (const alert of unreadAlerts) {
-            if (!notifiedIds.has(alert.id)) {
+            const lastNotified = lastNotificationTime.get(alert.id) || 0;
+            const timeSinceLastNotification = now - lastNotified;
+            
+            if (timeSinceLastNotification > FIVE_MINUTES) {
               await sendPushNotificationForAlert(alert, 'parent');
-              notifiedIds.add(alert.id); // Mark as notified
+              notifiedIds.add(alert.id);
+              lastNotificationTime.set(alert.id, now);
+            }
+          }
+          
+          // Clean up old notification times
+          for (const [alertId, timestamp] of lastNotificationTime.entries()) {
+            if (now - timestamp > 60 * 60 * 1000) {
+              lastNotificationTime.delete(alertId);
+              notifiedIds.delete(alertId);
             }
           }
           
@@ -327,7 +342,8 @@ export const cleanupGlobalPushNotifications = () => {
   unsubscribeFunctions = [];
   globalListenerActive = false;
   currentUser = null;
-  notifiedIds.clear(); // Clear notified IDs when cleaning up
+  notifiedIds.clear();
+  lastNotificationTime.clear();
 };
 
 // Check if global listener is active
