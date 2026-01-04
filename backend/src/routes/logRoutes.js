@@ -6,6 +6,6 @@ const role = require('../middleware/roleMiddleware');
 
 // Logs from MongoDB
 router.get('/', auth, role(['admin', 'developer']), logController.getLogs);
-router.post('/', auth, role(['admin', 'developer']), logController.createLog);
+// router.post('/', auth, role(['admin', 'developer']), logController.createLog); // Method doesn't exist yet
 
 module.exports = router;
