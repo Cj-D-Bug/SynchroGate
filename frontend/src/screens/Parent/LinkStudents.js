@@ -90,7 +90,13 @@ function LinkStudents() {
   const [networkErrorTitle, setNetworkErrorTitle] = useState('');
   const [networkErrorMessage, setNetworkErrorMessage] = useState('');
   const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [refreshCounter, setRefreshCounter] = useState(0);
   const hasReachedLinkLimit = useMemo(() => Array.isArray(linkedStudents) && linkedStudents.length >= MAX_LINKED_STUDENTS, [linkedStudents]);
+  
+  // Force re-render when link-related state changes
+  const triggerRefresh = useCallback(() => {
+    setRefreshCounter(prev => prev + 1);
+  }, []);
 
   // Resolve canonical parent doc id for parent_alerts (prefer formatted parentId)
   const getCanonicalParentDocId = async () => {
@@ -241,7 +247,10 @@ function LinkStudents() {
               // merge with canonical stream in the other listener via union of ids
               const map = new Map((prev || []).map(s => [s.id, s]));
               items1.forEach(s => map.set(s.id, s));
-              return Array.from(map.values());
+              const newList = Array.from(map.values());
+              // Force immediate UI update
+              setTimeout(() => triggerRefresh(), 0);
+              return newList;
             });
           },
           (error) => {
@@ -264,7 +273,10 @@ function LinkStudents() {
               setLinkedStudents(prev => {
                 const map = new Map((prev || []).map(s => [s.id, s]));
                 items2.forEach(s => map.set(s.id, s));
-                return Array.from(map.values());
+                const newList = Array.from(map.values());
+                // Force immediate UI update
+                setTimeout(() => triggerRefresh(), 0);
+                return newList;
               });
             },
             (error) => {
@@ -483,6 +495,8 @@ function LinkStudents() {
           setPendingReqMap(pendingByStudent);
           setSelfPendingMap(outgoingByStudent);
           setRequestedStudents(outgoingList);
+          // Force immediate UI update
+          setTimeout(() => triggerRefresh(), 0);
         } catch {}
       },
       (error) => {
@@ -498,6 +512,21 @@ function LinkStudents() {
     );
     return () => { try { unsub(); } catch {} };
   }, [user?.uid]);
+  
+  // Trigger refresh when linkedStudents changes
+  useEffect(() => {
+    triggerRefresh();
+  }, [linkedStudents, triggerRefresh]);
+  
+  // Trigger refresh when pendingReqMap changes
+  useEffect(() => {
+    triggerRefresh();
+  }, [pendingReqMap, triggerRefresh]);
+  
+  // Trigger refresh when linkedElsewhereMap changes
+  useEffect(() => {
+    triggerRefresh();
+  }, [linkedElsewhereMap, triggerRefresh]);
 
   const handleStudentNameInput = (text) => setSearchStudentName(text);
   const exitSearchMode = () => { setIsSearching(false); setSearchStudentName(''); };
@@ -653,6 +682,56 @@ function LinkStudents() {
         }, 3000);
         return;
       }
+      
+      // Check if student has reached their limit of 1 parent
+      try {
+        const studentCanonicalId = String(studentData?.studentId || studentData?.studentID || studentData?.studentIdNumber || studentUid).trim();
+        
+        // Query active links for this student (by UID and canonical ID)
+        const studentLinksByUid = query(
+          collection(db, 'parent_student_links'),
+          where('studentId', '==', studentUid),
+          where('status', '==', 'active')
+        );
+        const studentLinksByCanonical = studentCanonicalId && studentCanonicalId.includes('-')
+          ? query(
+              collection(db, 'parent_student_links'),
+              where('studentIdNumber', '==', studentCanonicalId),
+              where('status', '==', 'active')
+            )
+          : null;
+        
+        const [snapByUid, snapByCanonical] = await Promise.all([
+          getDocs(studentLinksByUid),
+          studentLinksByCanonical ? getDocs(studentLinksByCanonical) : Promise.resolve({ docs: [] })
+        ]);
+        
+        // Count unique parents (by parentId)
+        const uniqueParentIds = new Set();
+        [...snapByUid.docs, ...snapByCanonical.docs].forEach(doc => {
+          const data = doc.data();
+          const pid = String(data.parentId || '').trim();
+          const pidNum = String(data.parentIdNumber || '').trim();
+          if (pid) uniqueParentIds.add(pid);
+          if (pidNum) uniqueParentIds.add(pidNum);
+        });
+        
+        if (uniqueParentIds.size >= 1) {
+          setFeedbackSuccess(false);
+          setFeedbackTitle('Error');
+          setFeedbackMessage(`${studentData.firstName} ${studentData.lastName} has already linked to a parent. Students can only link to 1 parent.`);
+          setFeedbackVisible(true);
+          setTimeout(() => {
+            setFeedbackVisible(false);
+            resetToNormalState();
+          }, 3000);
+          return;
+        }
+      } catch (error) {
+        console.error('Error checking student link limit:', error);
+        // Continue with the request if check fails (non-blocking)
+      }
+      
       setLinkingStudent(true);
       // Prevent duplicate pending
       const dupQueryRef = query(collection(db, 'parent_student_links'), where('studentId', '==', studentUid), where('parentId', '==', parentUid), where('status', '==', 'pending'));
@@ -1190,6 +1269,8 @@ function LinkStudents() {
                       style={{ flex: 1 }}
                       data={results}
                       keyExtractor={(item) => item.uid || item.id}
+                      extraData={refreshCounter}
+                      removeClippedSubviews={false}
                       renderItem={({ item: student }) => {
                       const matchKeys = [
                         String(student.uid || '').trim(),
@@ -1218,6 +1299,7 @@ function LinkStudents() {
                       const isRequested = !!isRequestedLocal || matchKeys.some((key) => pendingReqMap[key]);
                       const linkedElsewhere = matchKeys.some((key) => linkedElsewhereMap[key]);
                       let badgeView = null;
+                      // Badge priority: Linked > Sent > Max > N/A > Link
                       if (isLinked) {
                         badgeView = (
                           <View style={styles.badgeLinkedBlue}><Text style={styles.badgeLinkedBlueText}>Linked</Text></View>
@@ -1226,13 +1308,13 @@ function LinkStudents() {
                         badgeView = (
                           <View style={styles.requestedBadge}><Text style={styles.requestedBadgeText}>Sent</Text></View>
                         );
-                      } else if (linkedElsewhere) {
-                        badgeView = (
-                          <View style={styles.badgeNARed}><Text style={styles.badgeNARedText}>N/A</Text></View>
-                        );
                       } else if (hasReachedLinkLimit) {
                         badgeView = (
                           <View style={styles.badgeNARed}><Text style={styles.badgeNARedText}>Max</Text></View>
+                        );
+                      } else if (linkedElsewhere) {
+                        badgeView = (
+                          <View style={styles.badgeNARed}><Text style={styles.badgeNARedText}>N/A</Text></View>
                         );
                       } else {
                         badgeView = (

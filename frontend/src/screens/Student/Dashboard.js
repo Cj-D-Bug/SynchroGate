@@ -19,7 +19,6 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { doc, onSnapshot, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
-import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
 import { wp, hp, fontSizes, responsiveStyles, getResponsiveDimensions } from '../../utils/responsive';
 import avatarEventEmitter from '../../utils/avatarEventEmitter';
 
@@ -47,10 +46,6 @@ const StudentDashboard = () => {
   const [feedbackVisible, setFeedbackVisible] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [feedbackSuccess, setFeedbackSuccess] = useState(true);
-  const [networkErrorVisible, setNetworkErrorVisible] = useState(false);
-  const [networkErrorTitle, setNetworkErrorTitle] = useState('');
-  const [networkErrorMessage, setNetworkErrorMessage] = useState('');
-  const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
   const [hasQrCode, setHasQrCode] = useState(false);
   const [loading, setLoading] = useState(false);
   const [profileLoaded, setProfileLoaded] = useState(false);
@@ -115,16 +110,6 @@ const StudentDashboard = () => {
           else await AsyncStorage.removeItem(`qrCodeUrl_${user.studentId}`);
         } catch {}
       } catch (e) {
-        console.error('Error checking QR code:', e);
-        // Only show network error modal for actual network errors
-        if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-          const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-          setNetworkErrorTitle(errorInfo.title);
-          setNetworkErrorMessage(errorInfo.message);
-          setNetworkErrorColor(errorInfo.color);
-          setNetworkErrorVisible(true);
-          setTimeout(() => setNetworkErrorVisible(false), 5000);
-        }
         // Keep whatever cached state we might have set
       }
       try { setQrLoaded(true); } catch {}
@@ -297,16 +282,7 @@ const StudentDashboard = () => {
         
         setTodayScheduleCount(count);
       } catch (error) {
-        console.error('Error loading today\'s schedule:', error);
-        // Only show network error modal for actual network errors
-        if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-          const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-          setNetworkErrorTitle(errorInfo.title);
-          setNetworkErrorMessage(errorInfo.message);
-          setNetworkErrorColor(errorInfo.color);
-          setNetworkErrorVisible(true);
-          setTimeout(() => setNetworkErrorVisible(false), 5000);
-        }
+        console.log('Error loading today\'s schedule:', error);
         setTodayScheduleCount(0);
       } finally {
         setScheduleLoading(false);
@@ -402,17 +378,7 @@ const StudentDashboard = () => {
           }
         }
         setOngoingClass(foundClass);
-      } catch (e) {
-        console.error('Error loading ongoing classes:', e);
-        // Only show network error modal for actual network errors
-        if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-          const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-          setNetworkErrorTitle(errorInfo.title);
-          setNetworkErrorMessage(errorInfo.message);
-          setNetworkErrorColor(errorInfo.color);
-          setNetworkErrorVisible(true);
-          setTimeout(() => setNetworkErrorVisible(false), 5000);
-        }
+      } catch {
         setOngoingClass(null);
       } finally {
         setOngoingLoading(false);
@@ -718,22 +684,7 @@ const StudentDashboard = () => {
                     setFeedbackMessage('QR request sent to admin');
                     setFeedbackSuccess(true);
                     setFeedbackVisible(true);
-                  } catch (e) {
-                    console.error('Error sending QR request:', e);
-                    // Only show network error modal for actual network errors
-                    if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-                      const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-                      setNetworkErrorTitle(errorInfo.title);
-                      setNetworkErrorMessage(errorInfo.message);
-                      setNetworkErrorColor(errorInfo.color);
-                      setNetworkErrorVisible(true);
-                      setTimeout(() => setNetworkErrorVisible(false), 5000);
-                    } else {
-                      setFeedbackMessage('Failed to send QR request');
-                      setFeedbackSuccess(false);
-                      setFeedbackVisible(true);
-                    }
-                  }
+                  } catch {}
                   setQrRequestSending(false);
                   setQrRequestVisible(false);
                   setTimeout(() => setFeedbackVisible(false), 1500);
@@ -762,18 +713,6 @@ const StudentDashboard = () => {
             </View>
             <Text style={styles.modalTitle}>{feedbackSuccess ? 'Success' : 'Notice'}</Text>
             <Text style={styles.modalText}>{feedbackMessage}</Text>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Network Error Modal */}
-      <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
-        <View style={styles.modalOverlayCenter}>
-          <View style={styles.fbModalCard}>
-            <View style={styles.fbModalContent}>
-              <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
-              {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
-            </View>
           </View>
         </View>
       </Modal>
@@ -846,7 +785,7 @@ const styles = StyleSheet.create({
   navTextActive: { fontSize: fontSizes.xs, color: '#2563eb', marginTop: hp(0.2), fontWeight: '600' },
   // Modal styles
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  modalCard: { backgroundColor: '#fff', borderRadius: 8, padding: 24, width: '85%', maxWidth: 400, alignItems: 'center' },
+  modalCard: { backgroundColor: '#fff', borderRadius: 16, padding: 24, width: '80%', alignItems: 'center' },
   modalIconWrap: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
   modalTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 8 },
   modalText: { fontSize: 16, color: '#6B7280', textAlign: 'center', marginBottom: 24 },
@@ -873,7 +812,7 @@ const styles = StyleSheet.create({
   centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', minHeight: 500, marginTop: -50 },
   emptyCard: {
     backgroundColor: '#fff',
-    borderRadius: 8,
+    borderRadius: 12,
     padding: 16,
     alignItems: 'center',
     borderWidth: 1,
@@ -888,7 +827,7 @@ const styles = StyleSheet.create({
   emptyIconWrap: {
     width: 40,
     height: 40,
-    borderRadius: 8,
+    borderRadius: 20,
     backgroundColor: '#FEF2F2',
     alignItems: 'center',
     justifyContent: 'center',
@@ -936,7 +875,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     minWidth: 0,
     padding: 14,
-    borderRadius: 8,
+    borderRadius: 12,
     borderWidth: 1,
     alignItems: 'flex-start',
     justifyContent: 'flex-start',
@@ -967,7 +906,7 @@ const styles = StyleSheet.create({
   overviewIconWrap: {
     width: 36,
     height: 36,
-    borderRadius: 8,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
@@ -1002,44 +941,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     letterSpacing: 0.3,
-  },
-  // Facebook-style modal styles (matching alerts.js)
-  modalOverlayCenter: { 
-    flex: 1, 
-    backgroundColor: 'rgba(0,0,0,0.5)', 
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 20
-  },
-  fbModalCard: {
-    width: '85%',
-    maxWidth: 400,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 8,
-    elevation: 5,
-    minHeight: 120,
-    justifyContent: 'space-between',
-  },
-  fbModalContent: {
-    flex: 1,
-  },
-  fbModalTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#050505',
-    marginBottom: 12,
-    textAlign: 'left',
-  },
-  fbModalMessage: {
-    fontSize: 15,
-    color: '#65676B',
-    textAlign: 'left',
-    lineHeight: 20,
   },
 });
 

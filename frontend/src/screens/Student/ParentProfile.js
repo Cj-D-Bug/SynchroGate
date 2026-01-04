@@ -114,49 +114,116 @@ const ParentProfile = () => {
   // Initialize currentParent from route params and fetch full data if needed
   useEffect(() => {
     const fetchParentData = async () => {
-      if (!parent?.id) return;
+      if (!parent?.id && !parent?.uid) return;
       
       try {
-        // Try to fetch full parent data from Firestore
-        const parentDocRef = doc(db, 'users', parent.id);
-        const parentSnap = await getDoc(parentDocRef);
+        let parentData = null;
+        let parentDocId = null;
         
-        if (parentSnap.exists()) {
-          const parentData = parentSnap.data();
+        // Strategy 1: Try fetching by document ID (parent.id or parent.uid)
+        const candidateIds = [
+          parent.id,
+          parent.uid,
+          parent.parentId,
+          parent.studentId
+        ].filter(Boolean);
+        
+        for (const candidateId of candidateIds) {
+          try {
+            const parentDocRef = doc(db, 'users', candidateId);
+            const parentSnap = await getDoc(parentDocRef);
+            if (parentSnap.exists()) {
+              const data = parentSnap.data();
+              // Verify it's actually a parent
+              if (data.role === 'parent') {
+                parentData = data;
+                parentDocId = parentSnap.id;
+                break;
+              }
+            }
+          } catch {}
+        }
+        
+        // Strategy 2: If not found by document ID, try querying by UID field
+        if (!parentData && (parent.uid || parent.id)) {
+          try {
+            const uidToQuery = parent.uid || parent.id;
+            const q = query(
+              collection(db, 'users'),
+              where('uid', '==', uidToQuery),
+              where('role', '==', 'parent')
+            );
+            const qSnap = await getDocs(q);
+            if (!qSnap.empty) {
+              parentData = qSnap.docs[0].data();
+              parentDocId = qSnap.docs[0].id;
+            }
+          } catch {}
+        }
+        
+        // Strategy 3: Try querying by parentId field (canonical ID)
+        if (!parentData && parent.parentId) {
+          try {
+            const q = query(
+              collection(db, 'users'),
+              where('parentId', '==', parent.parentId),
+              where('role', '==', 'parent')
+            );
+            const qSnap = await getDocs(q);
+            if (!qSnap.empty) {
+              parentData = qSnap.docs[0].data();
+              parentDocId = qSnap.docs[0].id;
+            }
+          } catch {}
+        }
+        
+        // Strategy 4: Try querying by studentId field (if parentId was passed as studentId)
+        if (!parentData && parent.studentId) {
+          try {
+            const q = query(
+              collection(db, 'users'),
+              where('parentId', '==', parent.studentId),
+              where('role', '==', 'parent')
+            );
+            const qSnap = await getDocs(q);
+            if (!qSnap.empty) {
+              parentData = qSnap.docs[0].data();
+              parentDocId = qSnap.docs[0].id;
+            }
+          } catch {}
+        }
+        
+        // Merge fetched data with route params data, preserving linkId
+        if (parentData && parentDocId) {
           setCurrentParent({
             ...parent,
             ...parentData,
-            id: parentSnap.id,
+            id: parentDocId,
+            uid: parentData.uid || parent.uid || parent.id,
+            parentId: parentData.parentId || parent.parentId || parent.studentId,
             linkId: parent.linkId, // Preserve linkId from route params
           });
         } else {
-          // If not found by ID, try by parentId
-          if (parent.parentId) {
-            const q = query(collection(db, 'users'), where('parentId', '==', parent.parentId), where('role', '==', 'parent'));
-            const qSnap = await getDocs(q);
-            if (!qSnap.empty) {
-              const parentData = qSnap.docs[0].data();
-              setCurrentParent({
-                ...parent,
-                ...parentData,
-                id: qSnap.docs[0].id,
-                linkId: parent.linkId,
-              });
-            } else {
-              setCurrentParent(parent);
-            }
-          } else {
-            setCurrentParent(parent);
-          }
+          // If no data found, use what we have from route params
+          setCurrentParent(parent);
         }
       } catch (error) {
         console.log('Error fetching parent data:', error);
+        // Only show network error modal for actual network errors
+        if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
+          const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
+          setNetworkErrorTitle(errorInfo.title);
+          setNetworkErrorMessage(errorInfo.message);
+          setNetworkErrorColor(errorInfo.color);
+          setNetworkErrorVisible(true);
+          setTimeout(() => setNetworkErrorVisible(false), 5000);
+        }
         setCurrentParent(parent);
       }
     };
     
     fetchParentData();
-  }, [parent?.id]);
+  }, [parent?.id, parent?.uid, parent?.parentId]);
 
   // ✅ Load saved images
   useEffect(() => {
@@ -179,19 +246,55 @@ const ParentProfile = () => {
   useEffect(() => {
     const checkLinkedStatus = async () => {
       try {
-        const parentId = currentParent?.parentId || currentParent?.id || currentParent?.uid;
-        if (!parentId) {
+        const parentUid = currentParent?.uid || currentParent?.id;
+        const parentCanonicalId = currentParent?.parentId || currentParent?.studentId;
+        
+        if (!parentUid && !parentCanonicalId) {
           setIsLinked(false);
           setLinkedStudents([]);
           return;
         }
         
-        const linksQuery = query(collection(db, 'parent_student_links'), where('parentId', '==', parentId), where('status', '==', 'active'));
-        const linksSnap = await getDocs(linksQuery);
+        // Query by both UID and canonical ID to find all links
+        const queries = [];
+        if (parentUid) {
+          queries.push(query(
+            collection(db, 'parent_student_links'),
+            where('parentId', '==', parentUid),
+            where('status', '==', 'active')
+          ));
+        }
+        if (parentCanonicalId && parentCanonicalId.includes('-')) {
+          queries.push(query(
+            collection(db, 'parent_student_links'),
+            where('parentIdNumber', '==', parentCanonicalId),
+            where('status', '==', 'active')
+          ));
+        }
         
-        if (!linksSnap.empty) {
+        if (queries.length === 0) {
+          setIsLinked(false);
+          setLinkedStudents([]);
+          return;
+        }
+        
+        const snapshots = await Promise.all(queries.map(q => getDocs(q)));
+        const allDocs = [];
+        const seenLinkIds = new Set();
+        
+        snapshots.forEach(snap => {
+          snap.docs.forEach(doc => {
+            // Avoid duplicates by linkId
+            if (!seenLinkIds.has(doc.id)) {
+              seenLinkIds.add(doc.id);
+              allDocs.push(doc);
+            }
+          });
+        });
+        
+        if (allDocs.length > 0) {
           setIsLinked(true);
-          const students = linksSnap.docs.map(doc => {
+          const students = allDocs.map(doc => {
             const data = doc.data();
             return {
               id: doc.id,
@@ -407,24 +510,40 @@ const ParentProfile = () => {
 
   // Real-time listener for parent data updates
   useEffect(() => {
-    if (!parent?.id) return;
+    if (!currentParent?.id) return;
 
-    const parentDocRef = doc(db, 'users', parent.id);
+    const parentDocRef = doc(db, 'users', currentParent.id);
     const unsubscribe = onSnapshot(parentDocRef, (snapshot) => {
       if (snapshot.exists()) {
-        const updatedData = { 
-          id: snapshot.id, 
-          ...snapshot.data(),
-          linkId: currentParent?.linkId || parent?.linkId, // Preserve linkId
-        };
-        setCurrentParent(updatedData);
+        const data = snapshot.data();
+        // Only update if it's actually a parent
+        if (data.role === 'parent') {
+          const updatedData = { 
+            ...currentParent,
+            ...data,
+            id: snapshot.id,
+            uid: data.uid || currentParent.uid || currentParent.id,
+            parentId: data.parentId || currentParent.parentId || currentParent.studentId,
+            linkId: currentParent?.linkId || parent?.linkId, // Preserve linkId
+          };
+          setCurrentParent(updatedData);
+        }
       }
     }, (error) => {
       console.log('Error listening to parent updates:', error);
+      // Only show network error modal for actual network errors
+      if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
+        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
+        setNetworkErrorTitle(errorInfo.title);
+        setNetworkErrorMessage(errorInfo.message);
+        setNetworkErrorColor(errorInfo.color);
+        setNetworkErrorVisible(true);
+        setTimeout(() => setNetworkErrorVisible(false), 5000);
+      }
     });
 
     return () => unsubscribe();
-  }, [parent?.id, currentParent?.linkId]);
+  }, [currentParent?.id, currentParent?.linkId, parent?.linkId]);
 
   return (
     <View style={{ flex: 1 }}>
@@ -575,6 +694,18 @@ const ParentProfile = () => {
                 {feedbackTitle || (feedbackSuccess ? 'Success' : 'Error')}
               </Text>
               {feedbackMessage ? <Text style={styles.fbModalMessage}>{feedbackMessage}</Text> : null}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Network Error Modal */}
+      <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
+        <View style={styles.modalOverlayCenter}>
+          <View style={styles.fbModalCard}>
+            <View style={styles.fbModalContent}>
+              <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
+              {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
             </View>
           </View>
         </View>

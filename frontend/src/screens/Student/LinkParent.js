@@ -207,13 +207,17 @@ function LinkStudents() {
           const parentDoc = await getDoc(doc(db, 'users', pid));
           if (parentDoc.exists()) {
             const parentData = parentDoc.data();
+            // Include all parent data fields for complete information
+            const parentNameParts = linkData.parentName ? linkData.parentName.split(' ').filter(Boolean) : [];
             parents.push({ 
+              ...parentData, // Include all parent fields (email, contactNumber, gender, birthday, address, etc.)
               linkId: linkDoc.id, 
-              id: pid, 
-              uid: pid,
-              firstName: linkData.parentName ? linkData.parentName.split(' ')[0] : (parentData.firstName || ''), 
-              lastName: linkData.parentName ? linkData.parentName.split(' ').slice(1).join(' ') : (parentData.lastName || ''), 
-              studentId: linkData.parentIdNumber || pid, 
+              id: parentDoc.id, // Use document ID
+              uid: parentData.uid || pid,
+              firstName: parentNameParts[0] || parentData.firstName || '', 
+              lastName: parentNameParts.slice(1).join(' ') || parentData.lastName || '', 
+              parentId: parentData.parentId || linkData.parentIdNumber || pid,
+              studentId: linkData.parentIdNumber || parentData.parentId || pid, 
               relationship: linkData.relationship, 
               linkedAt: linkData.linkedAt || new Date().toISOString() 
             });
@@ -291,13 +295,17 @@ function LinkStudents() {
           const parentDoc = await getDoc(doc(db, 'users', pid));
           if (parentDoc.exists()) {
             const parentData = parentDoc.data();
+            // Include all parent data fields for complete information
+            const parentNameParts = l.parentName ? l.parentName.split(' ').filter(Boolean) : [];
             out.push({ 
+              ...parentData, // Include all parent fields (email, contactNumber, gender, birthday, address, etc.)
               linkId: d.id, 
-              id: pid, 
-              uid: pid,
-              firstName: parentData.firstName || (l.parentName ? l.parentName.split(' ')[0] : ''), 
-              lastName: parentData.lastName || (l.parentName ? l.parentName.split(' ').slice(1).join(' ') : ''), 
-              studentId: l.parentIdNumber || pid, 
+              id: parentDoc.id, // Use document ID
+              uid: parentData.uid || pid,
+              firstName: parentNameParts[0] || parentData.firstName || '', 
+              lastName: parentNameParts.slice(1).join(' ') || parentData.lastName || '', 
+              parentId: parentData.parentId || l.parentIdNumber || pid,
+              studentId: l.parentIdNumber || parentData.parentId || pid, 
               relationship: l.relationship, 
               linkedAt: l.linkedAt || new Date().toISOString() 
             });
@@ -310,6 +318,7 @@ function LinkStudents() {
               uid: pid,
               firstName: parentNameParts[0] || '', 
               lastName: parentNameParts.slice(1).join(' ') || '', 
+              parentId: l.parentIdNumber || pid,
               studentId: l.parentIdNumber || pid, 
               relationship: l.relationship, 
               linkedAt: l.linkedAt || new Date().toISOString() 
@@ -324,6 +333,7 @@ function LinkStudents() {
             uid: pid,
             firstName: parentNameParts[0] || '', 
             lastName: parentNameParts.slice(1).join(' ') || '', 
+            parentId: l.parentIdNumber || pid,
             studentId: l.parentIdNumber || pid, 
             relationship: l.relationship, 
             linkedAt: l.linkedAt || new Date().toISOString() 
@@ -1142,6 +1152,62 @@ function LinkStudents() {
         }, 3000);
         return;
       }
+      
+      // Check if parent has reached their limit of 4 students
+      try {
+        const parentCanonicalId = String(
+          studentData?.parentId ||
+          studentData?.parentID ||
+          studentData?.parentIdNumber ||
+          studentData?.parentNumber ||
+          parentUid
+        ).trim();
+        
+        // Query active links for this parent (by UID and canonical ID)
+        const parentLinksByUid = query(
+          collection(db, 'parent_student_links'),
+          where('parentId', '==', parentUid),
+          where('status', '==', 'active')
+        );
+        const parentLinksByCanonical = parentCanonicalId && parentCanonicalId.includes('-')
+          ? query(
+              collection(db, 'parent_student_links'),
+              where('parentIdNumber', '==', parentCanonicalId),
+              where('status', '==', 'active')
+            )
+          : null;
+        
+        const [snapByUid, snapByCanonical] = await Promise.all([
+          getDocs(parentLinksByUid),
+          parentLinksByCanonical ? getDocs(parentLinksByCanonical) : Promise.resolve({ docs: [] })
+        ]);
+        
+        // Count unique students (by studentId)
+        const uniqueStudentIds = new Set();
+        [...snapByUid.docs, ...snapByCanonical.docs].forEach(doc => {
+          const data = doc.data();
+          const sid = String(data.studentId || '').trim();
+          const sidNum = String(data.studentIdNumber || '').trim();
+          if (sid) uniqueStudentIds.add(sid);
+          if (sidNum) uniqueStudentIds.add(sidNum);
+        });
+        
+        if (uniqueStudentIds.size >= 4) {
+          setFeedbackSuccess(false);
+          setFeedbackTitle('Error');
+          setFeedbackMessage(`${studentData.firstName} ${studentData.lastName} has reached the limit of 4 linked students.`);
+          setFeedbackVisible(true);
+          setTimeout(() => {
+            setFeedbackVisible(false);
+            resetToNormalState();
+          }, 3000);
+          return;
+        }
+      } catch (error) {
+        console.error('Error checking parent link limit:', error);
+        // Continue with the request if check fails (non-blocking)
+      }
+      
       setLinkingStudent(true);
       // Prevent duplicate pending
       const dupQueryRef = query(
@@ -1634,33 +1700,22 @@ function LinkStudents() {
                                   }
                                   
                                   // Navigate to ParentProfile for linked parents
+                                  // Pass complete parent object with all fields, ensuring linkId is included
+                                  const parentData = {
+                                    ...parent,
+                                    id: parent.id || parent.uid,
+                                    uid: parent.uid || parent.id,
+                                    parentId: parent.parentId || parent.studentId,
+                                    linkId: isLinked.linkId || isLinked.id
+                                  };
+                                  
                                   if (homeStack) {
                                     homeStack.navigate('Home', { 
                                       screen: 'ParentProfile', 
-                                      params: { 
-                                        parent: {
-                                          id: parent.uid || parent.id,
-                                          uid: parent.uid || parent.id,
-                                          firstName: parent.firstName,
-                                          lastName: parent.lastName,
-                                          parentId: parent.parentId || parent.studentId,
-                                          studentId: parent.parentId || parent.studentId,
-                                          linkId: isLinked.linkId
-                                        }
-                                      } 
+                                      params: { parent: parentData }
                                     });
                                   } else {
-                                    navigation.navigate('ParentProfile', { 
-                                      parent: {
-                                        id: parent.uid || parent.id,
-                                        uid: parent.uid || parent.id,
-                                        firstName: parent.firstName,
-                                        lastName: parent.lastName,
-                                        parentId: parent.parentId || parent.studentId,
-                                        studentId: parent.parentId || parent.studentId,
-                                        linkId: isLinked.linkId
-                                      }
-                                    });
+                                    navigation.navigate('ParentProfile', { parent: parentData });
                                   }
                                 } else {
                                   // Open modal for non-linked parents
@@ -1764,34 +1819,23 @@ function LinkStudents() {
                       <TouchableOpacity 
                         style={styles.viewDetailsButton}
                         onPress={() => {
+                          // Pass complete parent object with all fields
+                          const parentData = {
+                            ...item,
+                            id: item.id || item.uid,
+                            uid: item.uid || item.id,
+                            parentId: item.parentId || item.studentId,
+                            linkId: item.linkId
+                          };
+                          
                           const parentNav = navigation.getParent?.();
                           if (parentNav) {
                             parentNav.navigate('Home', { 
                               screen: 'ParentProfile', 
-                              params: { 
-                                parent: {
-                                  id: item.id,
-                                  uid: item.uid || item.id,
-                                  firstName: item.firstName,
-                                  lastName: item.lastName,
-                                  parentId: item.studentId,
-                                  studentId: item.studentId,
-                                  linkId: item.linkId
-                                }
-                              } 
+                              params: { parent: parentData }
                             });
                           } else {
-                            navigation.navigate('ParentProfile', { 
-                              parent: {
-                                id: item.id,
-                                uid: item.uid || item.id,
-                                firstName: item.firstName,
-                                lastName: item.lastName,
-                                parentId: item.studentId,
-                                studentId: item.studentId,
-                                linkId: item.linkId
-                              }
-                            });
+                            navigation.navigate('ParentProfile', { parent: parentData });
                           }
                         }}
                       >

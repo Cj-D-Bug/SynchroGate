@@ -536,6 +536,12 @@ const Alerts = () => {
             continue;
           }
           
+          // Keep schedule_permission_request notifications that haven't been responded to
+          if (itemType === 'schedule_permission_request') {
+            keep.push(it);
+            continue;
+          }
+          
           // Check if schedule_current notification is still valid
           if (itemType === 'schedule_current') {
             console.log('🔒 DELETE: Checking schedule_current notification:', {
@@ -1839,7 +1845,7 @@ const Alerts = () => {
         <View style={styles.fbModalCard}>
           <View style={styles.fbModalContent}>
             <Text style={styles.fbModalTitle}>Delete notifications?</Text>
-            <Text style={styles.fbModalMessage}>Delete all notifications except pending link requests and active "Class Happening Now" notifications? This cannot be undone.</Text>
+            <Text style={styles.fbModalMessage}>Delete all notifications except pending link requests, schedule permission requests, and active "Class Happening Now" notifications? This cannot be undone.</Text>
           </View>
           <View style={styles.fbModalButtonContainer}>
             <TouchableOpacity 
