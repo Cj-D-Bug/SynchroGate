@@ -13,46 +13,74 @@ export const sendAlertPushNotification = async (alert, userId, role) => {
   try {
     // Only send for unread alerts
     if (alert.status === 'read') {
+      console.log('⏭️ Skipping push notification - alert is already read');
       return;
     }
 
+    const url = `${BASE_URL}/notifications/alert-push`;
+    const payload = {
+      alert: {
+        id: alert.id || alert.alertId,
+        type: alert.type || alert.alertType,
+        title: alert.title,
+        message: alert.message,
+        status: alert.status,
+        studentId: alert.studentId,
+        parentId: alert.parentId,
+        studentName: alert.studentName,
+        parentName: alert.parentName,
+        currentKey: alert.currentKey,
+        subject: alert.subject,
+        time: alert.time,
+        linkId: alert.linkId,
+        requestId: alert.requestId,
+        response: alert.response,
+      },
+      userId: userId,
+      role: role,
+    };
+
+    console.log('📤 Sending push notification request:', {
+      url,
+      userId,
+      role,
+      alertId: alert.id || alert.alertId,
+      alertType: alert.type || alert.alertType,
+      alertTitle: alert.title
+    });
+
     // Call backend API to send push notification
-    const response = await fetch(`${BASE_URL}/notifications/alert-push`, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        alert: {
-          id: alert.id || alert.alertId,
-          type: alert.type || alert.alertType,
-          title: alert.title,
-          message: alert.message,
-          status: alert.status,
-          studentId: alert.studentId,
-          parentId: alert.parentId,
-          studentName: alert.studentName,
-          parentName: alert.parentName,
-          currentKey: alert.currentKey,
-          subject: alert.subject,
-          time: alert.time,
-          linkId: alert.linkId,
-          requestId: alert.requestId,
-          response: alert.response,
-        },
-        userId: userId,
-        role: role,
-      }),
+      body: JSON.stringify(payload),
     });
 
+    const responseData = await response.json().catch(() => ({}));
+
     if (!response.ok) {
-      console.warn('Failed to send push notification:', response.statusText);
+      console.error('❌ Failed to send push notification:', {
+        status: response.status,
+        statusText: response.statusText,
+        error: responseData.error || responseData.message,
+        details: responseData.details
+      });
     } else {
-      console.log(`✅ Push notification sent to ${role} ${userId}`);
+      console.log(`✅ Push notification sent successfully to ${role} ${userId}`, {
+        messageId: responseData.messageId
+      });
     }
   } catch (error) {
-    // Silently fail - don't block alert creation if push fails
-    console.warn('Error sending push notification (non-blocking):', error.message);
+    // Log error but don't block alert creation if push fails
+    console.error('❌ Error sending push notification (non-blocking):', {
+      message: error.message,
+      stack: error.stack,
+      userId,
+      role,
+      alertId: alert.id || alert.alertId
+    });
   }
 };
 

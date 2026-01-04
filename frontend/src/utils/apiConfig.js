@@ -27,6 +27,13 @@ try {
 } catch {}
 export const BASE_URL = explicitApi || derivedLan || 'http://localhost:8081/api';
 
+// Log the BASE_URL being used (for debugging)
+if (__DEV__) {
+  console.log('🌐 API Base URL:', BASE_URL);
+  console.log('🌐 Explicit API URL:', explicitApi);
+  console.log('🌐 Derived LAN URL:', derivedLan);
+}
+
 // If you want, add Firebase config URLs or just keep as placeholders
 export const FIREBASE_CONFIG = {
   apiKey: Constants.manifest?.extra?.firebaseApiKey || "AIzaSyCUoMISHi3xbhdf_ugGd6UYZy_H9Gp7mzs",
