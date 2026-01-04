@@ -150,36 +150,98 @@ const sendPushForAlert = async (alert, role, userId) => {
         console.log(`⚠️ [${role}] Alert has no parentId, assuming it belongs to document owner ${userId}`);
       }
       
-      // For parent alerts, also verify link to student
+      // CRITICAL: For parent alerts, MUST verify active link to student
+      // This ensures alerts are only sent to parents who are actually linked to the student
       const alertStudentId = alert.studentId || alert.student_id;
-      if (alertStudentId) {
-        const linkQuery = await firestore.collection('parent_student_links')
+      if (!alertStudentId) {
+        console.log(`⏭️ [${role}] SKIP - parent alert has no studentId (cannot verify link)`);
+        return; // No studentId in alert - cannot verify link
+      }
+      
+      // Try multiple queries to find the link (handle both UID and canonical ID formats)
+      let linkFound = false;
+      const parentIdNumber = userData?.parentId || userData?.parentIdNumber || userId;
+      
+      // Query 1: By parent UID and studentId (UID)
+      try {
+        const linkQuery1 = await firestore.collection('parent_student_links')
           .where('parentId', '==', userData.uid)
-          .where('studentId', '==', alertStudentId)
+          .where('studentId', '==', String(alertStudentId))
           .where('status', '==', 'active')
           .limit(1)
           .get();
         
-        if (linkQuery.empty) {
-          const parentIdNumber = userData?.parentId || userData?.parentIdNumber || userId;
-          if (parentIdNumber !== userData.uid) {
-            const linkQuery2 = await firestore.collection('parent_student_links')
-              .where('parentIdNumber', '==', parentIdNumber)
-              .where('studentId', '==', alertStudentId)
-              .where('status', '==', 'active')
-              .limit(1)
-              .get();
-            
-            if (linkQuery2.empty) {
-              console.log(`⏭️ Skipping push - parent ${userId} not linked to student ${alertStudentId}`);
-              return; // Not linked
-            }
-          } else {
-            console.log(`⏭️ Skipping push - parent ${userId} not linked to student ${alertStudentId}`);
-            return; // Not linked
+        if (!linkQuery1.empty) {
+          linkFound = true;
+          console.log(`✅ [${role}] Link found: parent ${userId} (${userData.uid}) linked to student ${alertStudentId} via parentId+studentId`);
+        }
+      } catch (e) {
+        console.log(`⚠️ [${role}] Error querying link by parentId+studentId:`, e.message);
+      }
+      
+      // Query 2: By parentIdNumber (canonical) and studentId
+      if (!linkFound && parentIdNumber && parentIdNumber !== userData.uid) {
+        try {
+          const linkQuery2 = await firestore.collection('parent_student_links')
+            .where('parentIdNumber', '==', String(parentIdNumber))
+            .where('studentId', '==', String(alertStudentId))
+            .where('status', '==', 'active')
+            .limit(1)
+            .get();
+          
+          if (!linkQuery2.empty) {
+            linkFound = true;
+            console.log(`✅ [${role}] Link found: parent ${userId} (${parentIdNumber}) linked to student ${alertStudentId} via parentIdNumber+studentId`);
           }
+        } catch (e) {
+          console.log(`⚠️ [${role}] Error querying link by parentIdNumber+studentId:`, e.message);
         }
       }
+      
+      // Query 3: By parentIdNumber and studentIdNumber (canonical IDs)
+      if (!linkFound && parentIdNumber && parentIdNumber !== userData.uid) {
+        try {
+          const linkQuery3 = await firestore.collection('parent_student_links')
+            .where('parentIdNumber', '==', String(parentIdNumber))
+            .where('studentIdNumber', '==', String(alertStudentId))
+            .where('status', '==', 'active')
+            .limit(1)
+            .get();
+          
+          if (!linkQuery3.empty) {
+            linkFound = true;
+            console.log(`✅ [${role}] Link found: parent ${userId} (${parentIdNumber}) linked to student ${alertStudentId} via canonical IDs`);
+          }
+        } catch (e) {
+          console.log(`⚠️ [${role}] Error querying link by canonical IDs:`, e.message);
+        }
+      }
+      
+      // Query 4: By parent UID and studentIdNumber
+      if (!linkFound) {
+        try {
+          const linkQuery4 = await firestore.collection('parent_student_links')
+            .where('parentId', '==', userData.uid)
+            .where('studentIdNumber', '==', String(alertStudentId))
+            .where('status', '==', 'active')
+            .limit(1)
+            .get();
+          
+          if (!linkQuery4.empty) {
+            linkFound = true;
+            console.log(`✅ [${role}] Link found: parent ${userId} (${userData.uid}) linked to student ${alertStudentId} via parentId+studentIdNumber`);
+          }
+        } catch (e) {
+          console.log(`⚠️ [${role}] Error querying link by parentId+studentIdNumber:`, e.message);
+        }
+      }
+      
+      if (!linkFound) {
+        console.log(`⏭️ [${role}] SKIP - parent ${userId} (${userData.uid}) is NOT actively linked to student ${alertStudentId}`);
+        return; // Not linked - do not send notification
+      }
+      
+      console.log(`✅ [${role}] VERIFIED: Parent ${userId} (${userData.uid}) is actively linked to student ${alertStudentId}`);
     }
     
     // ALL VALIDATIONS PASSED - Send notification
