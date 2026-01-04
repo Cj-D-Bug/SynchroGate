@@ -73,18 +73,43 @@ const sendPushForAlert = async (alert, role, userId) => {
     
     // CRITICAL: Validate that this alert is actually intended for this user
     // Check alert's target fields to ensure we're sending to the right person
+    // This is STRICT validation - alert MUST match the user
     if (role === 'student') {
       // For student alerts, verify the alert's studentId matches the userId
       const alertStudentId = alert.studentId || alert.student_id;
-      if (alertStudentId && alertStudentId !== userId) {
-        console.log(`⏭️ Skipping push notification - alert studentId (${alertStudentId}) doesn't match userId (${userId})`);
+      // STRICT: If alert has a studentId, it MUST match userId
+      if (alertStudentId) {
+        if (alertStudentId !== userId) {
+          console.log(`⏭️ Skipping push notification - alert studentId (${alertStudentId}) doesn't match userId (${userId})`);
+          return;
+        }
+      } else {
+        // Alert has no studentId - this is suspicious, skip it
+        console.log(`⏭️ Skipping push notification - student alert has no studentId field`);
         return;
       }
     } else if (role === 'parent') {
       // For parent alerts, verify the alert's parentId matches the userId
       const alertParentId = alert.parentId || alert.parent_id;
-      if (alertParentId && alertParentId !== userId) {
-        console.log(`⏭️ Skipping push notification - alert parentId (${alertParentId}) doesn't match userId (${userId})`);
+      // STRICT: If alert has a parentId, it MUST match userId
+      if (alertParentId) {
+        // Normalize parent IDs (both might have or not have dashes)
+        const normalizedAlertParentId = String(alertParentId).trim();
+        const normalizedUserId = String(userId).trim();
+        
+        // Check exact match or if both contain dashes, compare the parts
+        if (normalizedAlertParentId !== normalizedUserId) {
+          // Try matching without dashes or with dashes
+          const alertIdNoDash = normalizedAlertParentId.replace(/-/g, '');
+          const userIdNoDash = normalizedUserId.replace(/-/g, '');
+          if (alertIdNoDash !== userIdNoDash) {
+            console.log(`⏭️ Skipping push notification - alert parentId (${alertParentId}) doesn't match userId (${userId})`);
+            return;
+          }
+        }
+      } else {
+        // Alert has no parentId - this is suspicious, skip it
+        console.log(`⏭️ Skipping push notification - parent alert has no parentId field`);
         return;
       }
     }
@@ -135,25 +160,48 @@ const sendPushForAlert = async (alert, role, userId) => {
     }
     
     // CRITICAL: Only send to users who are actually logged in
-    // Check if FCM token was updated recently (within last 24 hours)
-    // This indicates the user logged in recently and is active
+    // Check if FCM token was updated recently (within last 1 hour - very strict)
+    // This indicates the user is currently logged in and active
     const pushTokenUpdatedAt = userData?.pushTokenUpdatedAt;
-    if (pushTokenUpdatedAt) {
-      const tokenUpdateTime = pushTokenUpdatedAt.toMillis ? pushTokenUpdatedAt.toMillis() : new Date(pushTokenUpdatedAt).getTime();
-      const timeSinceTokenUpdate = now - tokenUpdateTime;
-      const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
-      
-      // If token is older than 24 hours, user is likely not logged in
-      if (timeSinceTokenUpdate > TWENTY_FOUR_HOURS) {
-        console.log(`⏭️ Skipping push notification - user ${userId} token is too old (${Math.round(timeSinceTokenUpdate / (60 * 60 * 1000))} hours old)`);
-        return; // User hasn't logged in recently, skip notification
-      }
-    } else {
-      // No pushTokenUpdatedAt timestamp - token might be stale
-      // Only send if we're confident the user is active
-      // For now, we'll be conservative and skip if no timestamp
-      console.log(`⏭️ Skipping push notification - user ${userId} has no pushTokenUpdatedAt timestamp`);
+    if (!pushTokenUpdatedAt) {
+      // No timestamp - definitely not logged in
+      console.log(`⏭️ Skipping push notification - user ${userId} has no pushTokenUpdatedAt timestamp (not logged in)`);
       return;
+    }
+    
+    // Handle different timestamp formats
+    let tokenUpdateTime;
+    if (pushTokenUpdatedAt.toMillis) {
+      // Firestore Timestamp
+      tokenUpdateTime = pushTokenUpdatedAt.toMillis();
+    } else if (pushTokenUpdatedAt.seconds) {
+      // Firestore Timestamp (seconds)
+      tokenUpdateTime = pushTokenUpdatedAt.seconds * 1000;
+    } else if (typeof pushTokenUpdatedAt === 'string') {
+      // ISO string
+      tokenUpdateTime = new Date(pushTokenUpdatedAt).getTime();
+    } else if (typeof pushTokenUpdatedAt === 'number') {
+      // Unix timestamp (milliseconds)
+      tokenUpdateTime = pushTokenUpdatedAt;
+    } else {
+      // Unknown format - skip
+      console.log(`⏭️ Skipping push notification - user ${userId} has invalid pushTokenUpdatedAt format`);
+      return;
+    }
+    
+    // Check if timestamp is valid
+    if (isNaN(tokenUpdateTime) || tokenUpdateTime <= 0) {
+      console.log(`⏭️ Skipping push notification - user ${userId} has invalid pushTokenUpdatedAt value`);
+      return;
+    }
+    
+    const timeSinceTokenUpdate = now - tokenUpdateTime;
+    const ONE_HOUR = 60 * 60 * 1000; // Very strict: only 1 hour
+    
+    // If token is older than 1 hour, user is likely not logged in
+    if (timeSinceTokenUpdate > ONE_HOUR) {
+      console.log(`⏭️ Skipping push notification - user ${userId} token is too old (${Math.round(timeSinceTokenUpdate / (60 * 1000))} minutes old, max 60 minutes)`);
+      return; // User hasn't logged in recently, skip notification
     }
 
     // Build notification title and body
@@ -382,10 +430,24 @@ const initializeAdminAlertsListener = () => {
             const adminData = adminDoc.data();
             const pushTokenUpdatedAt = adminData?.pushTokenUpdatedAt;
             if (pushTokenUpdatedAt && adminData?.fcmToken) {
-              const tokenUpdateTime = pushTokenUpdatedAt.toMillis ? pushTokenUpdatedAt.toMillis() : new Date(pushTokenUpdatedAt).getTime();
-              const timeSinceTokenUpdate = now - tokenUpdateTime;
-              if (timeSinceTokenUpdate <= TWENTY_FOUR_HOURS) {
-                adminUserIds.push('Admin');
+              // Handle different timestamp formats
+              let tokenUpdateTime;
+              if (pushTokenUpdatedAt.toMillis) {
+                tokenUpdateTime = pushTokenUpdatedAt.toMillis();
+              } else if (pushTokenUpdatedAt.seconds) {
+                tokenUpdateTime = pushTokenUpdatedAt.seconds * 1000;
+              } else if (typeof pushTokenUpdatedAt === 'string') {
+                tokenUpdateTime = new Date(pushTokenUpdatedAt).getTime();
+              } else if (typeof pushTokenUpdatedAt === 'number') {
+                tokenUpdateTime = pushTokenUpdatedAt;
+              }
+              
+              if (tokenUpdateTime && !isNaN(tokenUpdateTime) && tokenUpdateTime > 0) {
+                const timeSinceTokenUpdate = now - tokenUpdateTime;
+                const ONE_HOUR = 60 * 60 * 1000; // Very strict: only 1 hour
+                if (timeSinceTokenUpdate <= ONE_HOUR) {
+                  adminUserIds.push('Admin');
+                }
               }
             }
           }
