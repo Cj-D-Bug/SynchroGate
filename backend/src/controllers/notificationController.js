@@ -264,12 +264,6 @@ const sendAlertPushNotification = async (req, res, next) => {
     const title = alert.title || 'New Alert';
     const body = alert.message || alert.body || 'You have a new alert';
     
-    console.log(`📤 Sending push notification:`, {
-      title,
-      body: body.substring(0, 50) + '...',
-      fcmToken: fcmToken.substring(0, 20) + '...'
-    });
-    
     // Send push notification
     let result;
     try {
@@ -287,7 +281,6 @@ const sendAlertPushNotification = async (req, res, next) => {
           ...alert // Include all alert data
         }
       );
-      console.log('✅ Push notification sent successfully:', result);
     } catch (pushError) {
       // Handle FCM errors gracefully
       console.error('❌ FCM push notification failed:', pushError);

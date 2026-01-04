@@ -19,8 +19,6 @@ export const sendAlertPushNotification = async (alert, userId, role) => {
 
     // Construct URL - BASE_URL already includes /api, so just add the path
     const url = `${BASE_URL}/notifications/alert-push`;
-    console.log('🔗 Constructed URL:', url);
-    console.log('🔗 BASE_URL value:', BASE_URL);
     const payload = {
       alert: {
         id: alert.id || alert.alertId,
@@ -43,18 +41,7 @@ export const sendAlertPushNotification = async (alert, userId, role) => {
       role: role,
     };
 
-    console.log('📤 Sending push notification request:', {
-      url,
-      userId,
-      role,
-      alertId: alert.id || alert.alertId,
-      alertType: alert.type || alert.alertType,
-      alertTitle: alert.title
-    });
-    console.log('📤 Full payload:', JSON.stringify(payload, null, 2));
-
     // Call backend API to send push notification
-    console.log('📤 Making fetch request to:', url);
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -62,7 +49,6 @@ export const sendAlertPushNotification = async (alert, userId, role) => {
       },
       body: JSON.stringify(payload),
     });
-    console.log('📤 Fetch response status:', response.status, response.statusText);
 
     const responseData = await response.json().catch(() => ({}));
 
