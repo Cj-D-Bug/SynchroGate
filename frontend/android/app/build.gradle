@@ -176,22 +176,23 @@ dependencies {
     }
 }
 
+// Copy google-services.json to release/debug directories before Google Services plugin runs
+task copyGoogleServices(type: Copy) {
+    from file("google-services.json")
+    into file("src/release")
+    onlyIf { file("google-services.json").exists() }
+}
+
+task copyGoogleServicesDebug(type: Copy) {
+    from file("google-services.json")
+    into file("src/debug")
+    onlyIf { file("google-services.json").exists() }
+}
+
+// Run copy tasks before preBuild
+preBuild.dependsOn copyGoogleServices
+preBuild.dependsOn copyGoogleServicesDebug
+
 // CRITICAL: Always apply Google Services plugin for Firebase to work
 // This processes google-services.json and auto-initializes Firebase
 apply plugin: 'com.google.gms.google-services'
-
-// Copy google-services.json to release/debug directories if not present
-android.applicationVariants.all { variant ->
-    def variantName = variant.name.capitalize()
-    def googleServicesFile = file("google-services.json")
-    def targetDir = file("src/${variant.buildType.name}")
-    def targetFile = new File(targetDir, "google-services.json")
-    
-    if (googleServicesFile.exists() && !targetFile.exists()) {
-        targetDir.mkdirs()
-        copy {
-            from googleServicesFile
-            into targetDir
-        }
-    }
-}
