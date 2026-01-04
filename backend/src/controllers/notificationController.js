@@ -219,30 +219,64 @@ const sendAlertPushNotification = async (req, res, next) => {
       return res.status(403).json({ error: "Role mismatch" });
     }
     
-    // For parent alerts, verify link to student
-    if (role === 'parent' && alert.studentId) {
-      const linkQuery = await firestore.collection('parent_student_links')
-        .where('parentId', '==', userData.uid)
-        .where('studentId', '==', alert.studentId)
-        .where('status', '==', 'active')
-        .limit(1)
-        .get();
+    // CRITICAL: Validate alert target matches userId
+    // userId can be UID or canonical ID, alert.parentId/studentId can also be either
+    if (role === 'student') {
+      const alertStudentId = alert.studentId || alert.student_id;
+      if (alertStudentId) {
+        // Normalize both IDs for comparison
+        const normalizedAlertStudentId = String(alertStudentId).replace(/-/g, '').trim();
+        const normalizedUserId = String(userId).replace(/-/g, '').trim();
+        const normalizedUserStudentId = String(userData?.studentId || '').replace(/-/g, '').trim();
+        // Check if alert is for this student
+        if (normalizedAlertStudentId !== normalizedUserId && 
+            normalizedAlertStudentId !== normalizedUserStudentId &&
+            alertStudentId !== userId &&
+            alertStudentId !== userData?.studentId) {
+          return res.status(403).json({ error: "Alert not for this student" });
+        }
+      }
+    } else if (role === 'parent') {
+      const alertParentId = alert.parentId || alert.parent_id;
+      if (alertParentId) {
+        // Normalize both IDs for comparison
+        const normalizedAlertParentId = String(alertParentId).replace(/-/g, '').trim();
+        const normalizedUserId = String(userId).replace(/-/g, '').trim();
+        const normalizedUserParentId = String(userData?.parentId || '').replace(/-/g, '').trim();
+        // Check if alert is for this parent
+        if (normalizedAlertParentId !== normalizedUserId && 
+            normalizedAlertParentId !== normalizedUserParentId &&
+            alertParentId !== userId &&
+            alertParentId !== userData?.parentId) {
+          return res.status(403).json({ error: "Alert not for this parent" });
+        }
+      }
       
-      if (linkQuery.empty) {
-        const parentIdNumber = userData?.parentId || userData?.parentIdNumber || userId;
-        if (parentIdNumber !== userData.uid) {
-          const linkQuery2 = await firestore.collection('parent_student_links')
-            .where('parentIdNumber', '==', parentIdNumber)
-            .where('studentId', '==', alert.studentId)
-            .where('status', '==', 'active')
-            .limit(1)
-            .get();
-          
-          if (linkQuery2.empty) {
+      // For parent alerts, also verify link to student
+      if (alert.studentId) {
+        const linkQuery = await firestore.collection('parent_student_links')
+          .where('parentId', '==', userData.uid)
+          .where('studentId', '==', alert.studentId)
+          .where('status', '==', 'active')
+          .limit(1)
+          .get();
+        
+        if (linkQuery.empty) {
+          const parentIdNumber = userData?.parentId || userData?.parentIdNumber || userId;
+          if (parentIdNumber !== userData.uid) {
+            const linkQuery2 = await firestore.collection('parent_student_links')
+              .where('parentIdNumber', '==', parentIdNumber)
+              .where('studentId', '==', alert.studentId)
+              .where('status', '==', 'active')
+              .limit(1)
+              .get();
+            
+            if (linkQuery2.empty) {
+              return res.status(403).json({ error: "Parent not linked to student" });
+            }
+          } else {
             return res.status(403).json({ error: "Parent not linked to student" });
           }
-        } else {
-          return res.status(403).json({ error: "Parent not linked to student" });
         }
       }
     }

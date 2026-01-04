@@ -35,21 +35,33 @@ const sendPushForAlert = async (alert, role, userId) => {
     }
 
     // STEP 1: Validate alert target matches userId
+    // CRITICAL: userId can be either UID or canonical ID (with dashes)
+    // alert.studentId/parentId can also be either format
+    // We need to check both formats to ensure we're sending to the right user
+    
     if (role === 'student') {
       const alertStudentId = alert.studentId || alert.student_id;
-      if (!alertStudentId || alertStudentId !== userId) {
-        return; // Wrong student
+      if (!alertStudentId) {
+        return; // No studentId in alert
+      }
+      // Normalize both IDs (remove dashes) for comparison
+      const normalizedAlertStudentId = String(alertStudentId).replace(/-/g, '').trim();
+      const normalizedUserId = String(userId).replace(/-/g, '').trim();
+      // Also check exact match (in case one has dashes and other doesn't)
+      if (normalizedAlertStudentId !== normalizedUserId && alertStudentId !== userId) {
+        return; // Wrong student - IDs don't match
       }
     } else if (role === 'parent') {
       const alertParentId = alert.parentId || alert.parent_id;
       if (!alertParentId) {
         return; // No parentId in alert
       }
-      // Normalize IDs for comparison
+      // Normalize both IDs (remove dashes) for comparison
       const normalizedAlertParentId = String(alertParentId).replace(/-/g, '').trim();
       const normalizedUserId = String(userId).replace(/-/g, '').trim();
-      if (normalizedAlertParentId !== normalizedUserId) {
-        return; // Wrong parent
+      // Also check exact match (in case one has dashes and other doesn't)
+      if (normalizedAlertParentId !== normalizedUserId && alertParentId !== userId) {
+        return; // Wrong parent - IDs don't match
       }
     }
     
