@@ -38,12 +38,15 @@ const sendPushForAlert = async (alert, role, userId) => {
     // CRITICAL STEP 1: Get user document by EXACT document ID
     // userId = document ID in users collection = studentId or parentId
     // This MUST match exactly - no fallback queries
+    console.log(`🔍 Checking push for ${role} userId: ${userId}, alertId: ${alertId}`);
     const userDoc = await firestore.collection('users').doc(userId).get();
     
     if (!userDoc.exists) {
-      console.log(`⏭️ Skipping push - user document ${userId} does not exist`);
+      console.log(`⏭️ SKIP - user document ${userId} does not exist`);
       return; // User doesn't exist - can't send notification
     }
+    
+    console.log(`✅ User document ${userId} exists`);
     
     const userData = userDoc.data();
     
@@ -172,6 +175,9 @@ const sendPushForAlert = async (alert, role, userId) => {
     const title = alert.title || 'New Alert';
     const body = alert.message || alert.body || 'You have a new alert';
     
+    console.log(`✅ ALL VALIDATIONS PASSED - Sending push to ${role} ${userId}`);
+    console.log(`   User: ${userData.uid}, Role: ${userData.role}, HasToken: ${!!userData.fcmToken}`);
+    
     await pushService.sendPush(
       userData.fcmToken,
       title,
@@ -189,7 +195,7 @@ const sendPushForAlert = async (alert, role, userId) => {
     
     // Mark as notified
     notifiedAlerts.set(deduplicationKey, now);
-    console.log(`✅ Push sent to ${role} ${userId} - ${title}`);
+    console.log(`✅✅✅ PUSH SENT to ${role} ${userId} (${userData.uid}) - ${title}`);
     
   } catch (error) {
     console.error(`❌ Push failed for ${role} ${userId}:`, error.message);
