@@ -55,12 +55,7 @@ const sendPushNotification = async (fcmToken, title, body, data = {}) => {
           // clickAction: 'FLUTTER_NOTIFICATION_CLICK', // This might interfere
           // Ensure notification shows even when screen is off
           lightSettings: {
-            color: {
-              red: 0.0,
-              green: 0.0,
-              blue: 1.0,
-              alpha: 1.0,
-            },
+            color: '#0000FF', // Blue color in hex format (#RRGGBB)
             lightOnDurationMillis: 1000, // 1 second in milliseconds
             lightOffDurationMillis: 1000, // 1 second in milliseconds
           },
