@@ -404,22 +404,41 @@ const initializeAdminAlertsListener = () => {
         
         const adminUserIds = [];
         const now = Date.now();
-        const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+        const ONE_HOUR = 60 * 60 * 1000; // Very strict: only 1 hour
         
         adminUsersSnapshot.forEach(doc => {
           const userData = doc.data();
           
           // Only include admins who are logged in (have recent FCM token)
           const pushTokenUpdatedAt = userData?.pushTokenUpdatedAt;
-          if (pushTokenUpdatedAt && userData?.fcmToken) {
-            const tokenUpdateTime = pushTokenUpdatedAt.toMillis ? pushTokenUpdatedAt.toMillis() : new Date(pushTokenUpdatedAt).getTime();
-            const timeSinceTokenUpdate = now - tokenUpdateTime;
-            
-            // Only include if token was updated within last 24 hours (user is logged in)
-            if (timeSinceTokenUpdate <= TWENTY_FOUR_HOURS) {
-              const userId = doc.id === 'Admin' ? 'Admin' : (userData?.uid || doc.id);
-              adminUserIds.push(userId);
-            }
+          if (!pushTokenUpdatedAt || !userData?.fcmToken) {
+            return; // Skip admins without token or timestamp
+          }
+          
+          // Handle different timestamp formats
+          let tokenUpdateTime;
+          if (pushTokenUpdatedAt.toMillis) {
+            tokenUpdateTime = pushTokenUpdatedAt.toMillis();
+          } else if (pushTokenUpdatedAt.seconds) {
+            tokenUpdateTime = pushTokenUpdatedAt.seconds * 1000;
+          } else if (typeof pushTokenUpdatedAt === 'string') {
+            tokenUpdateTime = new Date(pushTokenUpdatedAt).getTime();
+          } else if (typeof pushTokenUpdatedAt === 'number') {
+            tokenUpdateTime = pushTokenUpdatedAt;
+          } else {
+            return; // Invalid format
+          }
+          
+          if (isNaN(tokenUpdateTime) || tokenUpdateTime <= 0) {
+            return; // Invalid timestamp
+          }
+          
+          const timeSinceTokenUpdate = now - tokenUpdateTime;
+          
+          // Only include if token was updated within last 1 hour (user is currently logged in)
+          if (timeSinceTokenUpdate <= ONE_HOUR) {
+            const userId = doc.id === 'Admin' ? 'Admin' : (userData?.uid || doc.id);
+            adminUserIds.push(userId);
           }
         });
         
