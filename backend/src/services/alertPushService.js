@@ -159,8 +159,29 @@ const sendPushForAlert = async (alert, role, userId) => {
       return; // No FCM token
     }
     
-    // CRITICAL: Only send to users who are actually logged in
-    // Check if FCM token was updated recently (within last 1 hour - very strict)
+    // CRITICAL: Only send to users who are actually logged in with a role
+    // Check 1: User must have a role (not on role selection screen)
+    const userRole = userData?.role;
+    if (!userRole || typeof userRole !== 'string' || userRole.trim().length === 0) {
+      console.log(`⏭️ Skipping push notification - user ${userId} has no role (not logged in)`);
+      return; // User hasn't selected a role yet
+    }
+    
+    // Check 2: User must have a UID (actually authenticated)
+    const userUid = userData?.uid;
+    if (!userUid || typeof userUid !== 'string' || userUid.trim().length === 0) {
+      console.log(`⏭️ Skipping push notification - user ${userId} has no UID (not authenticated)`);
+      return; // User not authenticated
+    }
+    
+    // Check 3: Role must match the expected role for this alert
+    const roleLower = String(userRole).toLowerCase();
+    if (role !== roleLower) {
+      console.log(`⏭️ Skipping push notification - user ${userId} role (${roleLower}) doesn't match alert role (${role})`);
+      return; // Role mismatch
+    }
+    
+    // Check 4: FCM token was updated recently (within last 1 hour - very strict)
     // This indicates the user is currently logged in and active
     const pushTokenUpdatedAt = userData?.pushTokenUpdatedAt;
     if (!pushTokenUpdatedAt) {
@@ -447,25 +468,44 @@ const initializeAdminAlertsListener = () => {
           const adminDoc = await firestore.collection('users').doc('Admin').get();
           if (adminDoc.exists) {
             const adminData = adminDoc.data();
-            const pushTokenUpdatedAt = adminData?.pushTokenUpdatedAt;
-            if (pushTokenUpdatedAt && adminData?.fcmToken) {
-              // Handle different timestamp formats
-              let tokenUpdateTime;
-              if (pushTokenUpdatedAt.toMillis) {
-                tokenUpdateTime = pushTokenUpdatedAt.toMillis();
-              } else if (pushTokenUpdatedAt.seconds) {
-                tokenUpdateTime = pushTokenUpdatedAt.seconds * 1000;
-              } else if (typeof pushTokenUpdatedAt === 'string') {
-                tokenUpdateTime = new Date(pushTokenUpdatedAt).getTime();
-              } else if (typeof pushTokenUpdatedAt === 'number') {
-                tokenUpdateTime = pushTokenUpdatedAt;
-              }
-              
-              if (tokenUpdateTime && !isNaN(tokenUpdateTime) && tokenUpdateTime > 0) {
-                const timeSinceTokenUpdate = now - tokenUpdateTime;
-                const ONE_HOUR = 60 * 60 * 1000; // Very strict: only 1 hour
-                if (timeSinceTokenUpdate <= ONE_HOUR) {
-                  adminUserIds.push('Admin');
+            
+            // Check 1: Must have FCM token
+            if (!adminData?.fcmToken) {
+              // Skip
+            } else {
+              // Check 2: Must have a role
+              const userRole = adminData?.role;
+              if (!userRole || typeof userRole !== 'string' || userRole.toLowerCase() !== 'admin') {
+                // Skip
+              } else {
+                // Check 3: Must have UID
+                const userUid = adminData?.uid;
+                if (!userUid || typeof userUid !== 'string' || userUid.trim().length === 0) {
+                  // Skip
+                } else {
+                  // Check 4: FCM token was updated recently
+                  const pushTokenUpdatedAt = adminData?.pushTokenUpdatedAt;
+                  if (pushTokenUpdatedAt) {
+                    // Handle different timestamp formats
+                    let tokenUpdateTime;
+                    if (pushTokenUpdatedAt.toMillis) {
+                      tokenUpdateTime = pushTokenUpdatedAt.toMillis();
+                    } else if (pushTokenUpdatedAt.seconds) {
+                      tokenUpdateTime = pushTokenUpdatedAt.seconds * 1000;
+                    } else if (typeof pushTokenUpdatedAt === 'string') {
+                      tokenUpdateTime = new Date(pushTokenUpdatedAt).getTime();
+                    } else if (typeof pushTokenUpdatedAt === 'number') {
+                      tokenUpdateTime = pushTokenUpdatedAt;
+                    }
+                    
+                    if (tokenUpdateTime && !isNaN(tokenUpdateTime) && tokenUpdateTime > 0) {
+                      const timeSinceTokenUpdate = now - tokenUpdateTime;
+                      const ONE_HOUR = 60 * 60 * 1000; // Very strict: only 1 hour
+                      if (timeSinceTokenUpdate <= ONE_HOUR) {
+                        adminUserIds.push('Admin');
+                      }
+                    }
+                  }
                 }
               }
             }
