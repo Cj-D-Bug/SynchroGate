@@ -55,19 +55,40 @@ const getParentDocId = async (parentId) => {
 const sendPushForAlert = async (alert, role, userId) => {
   try {
     // Time-based deduplication - only send if we haven't notified in the last 5 minutes
+    // Use a composite key: alertId + userId to prevent sending same alert to same user multiple times
     const now = Date.now();
     const FIVE_MINUTES = 5 * 60 * 1000;
     const alertId = alert.id || alert.alertId;
+    const deduplicationKey = alertId ? `${alertId}_${userId}` : null;
     
-    if (alertId) {
-      const lastNotified = notifiedAlerts.get(alertId) || 0;
+    if (deduplicationKey) {
+      const lastNotified = notifiedAlerts.get(deduplicationKey) || 0;
       const timeSinceLastNotification = now - lastNotified;
       
       if (timeSinceLastNotification <= FIVE_MINUTES) {
-        // Skip - we notified about this alert recently
+        // Skip - we notified this user about this alert recently
         return;
       }
     }
+    
+    // CRITICAL: Validate that this alert is actually intended for this user
+    // Check alert's target fields to ensure we're sending to the right person
+    if (role === 'student') {
+      // For student alerts, verify the alert's studentId matches the userId
+      const alertStudentId = alert.studentId || alert.student_id;
+      if (alertStudentId && alertStudentId !== userId) {
+        console.log(`⏭️ Skipping push notification - alert studentId (${alertStudentId}) doesn't match userId (${userId})`);
+        return;
+      }
+    } else if (role === 'parent') {
+      // For parent alerts, verify the alert's parentId matches the userId
+      const alertParentId = alert.parentId || alert.parent_id;
+      if (alertParentId && alertParentId !== userId) {
+        console.log(`⏭️ Skipping push notification - alert parentId (${alertParentId}) doesn't match userId (${userId})`);
+        return;
+      }
+    }
+    // For admin alerts, we allow sending to all admins (already filtered by login status)
     
     // Get user's FCM token
     let userDoc = null;
