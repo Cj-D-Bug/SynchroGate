@@ -26,6 +26,6 @@ router.post(
 );
 
 // Protect this route with Firebase token verification
-router.post("/refresh-token", authMiddleware, authController.refreshToken);
+// router.post("/refresh-token", authMiddleware, authController.refreshToken);
 
 module.exports = router;
