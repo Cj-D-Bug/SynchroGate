@@ -17,7 +17,10 @@ export const sendAlertPushNotification = async (alert, userId, role) => {
       return;
     }
 
+    // Construct URL - BASE_URL already includes /api, so just add the path
     const url = `${BASE_URL}/notifications/alert-push`;
+    console.log('🔗 Constructed URL:', url);
+    console.log('🔗 BASE_URL value:', BASE_URL);
     const payload = {
       alert: {
         id: alert.id || alert.alertId,
