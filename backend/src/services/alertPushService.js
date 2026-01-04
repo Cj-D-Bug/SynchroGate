@@ -115,51 +115,6 @@ const sendPushForAlert = async (alert, role, userId) => {
         return;
       }
       
-      // CRITICAL: Verify parent is actually LINKED to the student in the alert
-      // This prevents sending alerts to unlinked parents
-      const alertStudentId = alert.studentId || alert.student_id;
-      if (alertStudentId) {
-        try {
-          // Check if parent is linked to this student in parent_student_links
-          const linksQuery = await firestore.collection('parent_student_links')
-            .where('parentId', '==', userUid) // Use UID for parent lookup
-            .where('studentId', '==', alertStudentId)
-            .where('status', '==', 'active')
-            .limit(1)
-            .get();
-          
-          if (linksQuery.empty) {
-            // Also try with parentIdNumber (canonical ID) if userId is canonical
-            const parentIdNumber = userData?.parentId || userId;
-            if (parentIdNumber && parentIdNumber !== userUid) {
-              const linksQuery2 = await firestore.collection('parent_student_links')
-                .where('parentIdNumber', '==', parentIdNumber)
-                .where('studentId', '==', alertStudentId)
-                .where('status', '==', 'active')
-                .limit(1)
-                .get();
-              
-              if (linksQuery2.empty) {
-                console.log(`⏭️ Skipping push notification - parent ${userId} is not linked to student ${alertStudentId}`);
-                return; // Parent is not linked to this student - don't send alert
-              }
-            } else {
-              console.log(`⏭️ Skipping push notification - parent ${userId} is not linked to student ${alertStudentId}`);
-              return; // Parent is not linked to this student - don't send alert
-            }
-          }
-          // Link exists - proceed with notification
-        } catch (linkError) {
-          console.error(`Error verifying parent-student link:`, linkError);
-          // On error, be conservative and skip
-          console.log(`⏭️ Skipping push notification - error verifying link between parent ${userId} and student ${alertStudentId}`);
-          return;
-        }
-      } else {
-        // Alert has no studentId - can't verify link, skip it
-        console.log(`⏭️ Skipping push notification - parent alert has no studentId field (cannot verify link)`);
-        return;
-      }
     }
     // For admin alerts, we allow sending to all admins (already filtered by login status)
     
