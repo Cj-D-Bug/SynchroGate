@@ -180,6 +180,7 @@ const sendAlertPushNotification = async (req, res, next) => {
     }
 
     // Get user document
+    // CRITICAL: userId can be UID or canonical ID, we need to find the user document
     let userDoc = await firestore.collection('users').doc(userId).get();
     
     if (!userDoc.exists && (role === 'admin' || role === 'developer')) {
@@ -187,9 +188,22 @@ const sendAlertPushNotification = async (req, res, next) => {
       userDoc = await firestore.collection('users').doc(altId).get();
     }
     
+    // Try querying by UID if still not found (userId might be canonical ID)
     if (!userDoc.exists) {
       const querySnapshot = await firestore.collection('users')
         .where('uid', '==', userId)
+        .limit(1)
+        .get();
+      if (!querySnapshot.empty) {
+        userDoc = querySnapshot.docs[0];
+      }
+    }
+    
+    // For students/parents, also try querying by studentId/parentId if userId is canonical
+    if (!userDoc.exists && (role === 'student' || role === 'parent')) {
+      const fieldName = role === 'student' ? 'studentId' : 'parentId';
+      const querySnapshot = await firestore.collection('users')
+        .where(fieldName, '==', userId)
         .limit(1)
         .get();
       if (!querySnapshot.empty) {
