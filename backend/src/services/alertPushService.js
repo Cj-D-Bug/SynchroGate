@@ -295,8 +295,19 @@ const initializeStudentAlertsListener = () => {
         previousStudentAlerts.set(studentId, allCurrentAlertIds);
         
         // CRITICAL: Only send to this specific student (document ID)
+        // Verify alert belongs to this student before sending
         for (const alert of newAlerts) {
-          if (!alert.studentId) {
+          // CRITICAL: Verify alert's studentId matches document ID
+          const alertStudentId = alert.studentId || alert.student_id;
+          if (alertStudentId) {
+            const normalizedAlertStudentId = String(alertStudentId).replace(/-/g, '').trim().toLowerCase();
+            const normalizedStudentId = String(studentId).replace(/-/g, '').trim().toLowerCase();
+            if (normalizedAlertStudentId !== normalizedStudentId) {
+              console.log(`⏭️ Skipping alert ${alert.id || alert.alertId} - studentId (${alertStudentId}) doesn't match document ID (${studentId})`);
+              continue; // Alert doesn't belong to this student
+            }
+          } else {
+            // If no studentId, set it to match document ID
             alert.studentId = studentId;
           }
           console.log(`📨 Processing NEW alert for student ${studentId}: ${alert.id || alert.alertId}`);
@@ -407,10 +418,20 @@ const initializeParentAlertsListener = () => {
         previousParentAlerts.set(parentId, allCurrentAlertIds);
         
         // CRITICAL: Only send to this specific parent (document ID)
-        // Ensure alert has parentId matching document ID
+        // Verify alert belongs to this parent before sending
         for (const alert of newAlerts) {
-          if (!alert.parentId) {
-            alert.parentId = parentId; // Set it to match document ID
+          // CRITICAL: Verify alert's parentId matches document ID
+          const alertParentId = alert.parentId || alert.parent_id;
+          if (alertParentId) {
+            const normalizedAlertParentId = String(alertParentId).replace(/-/g, '').trim().toLowerCase();
+            const normalizedParentId = String(parentId).replace(/-/g, '').trim().toLowerCase();
+            if (normalizedAlertParentId !== normalizedParentId) {
+              console.log(`⏭️ Skipping alert ${alert.id || alert.alertId} - parentId (${alertParentId}) doesn't match document ID (${parentId})`);
+              continue; // Alert doesn't belong to this parent
+            }
+          } else {
+            // If no parentId, set it to match document ID
+            alert.parentId = parentId;
           }
           console.log(`📨 Processing NEW alert for parent ${parentId}: ${alert.id || alert.alertId}`);
           await sendPushForAlert(alert, 'parent', parentId);
