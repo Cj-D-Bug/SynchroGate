@@ -168,8 +168,8 @@ const logNotificationEvent = async (req, res, next) => {
 };
 
 /**
- * Send push notification for an alert - SIMPLIFIED
- * Only sends to logged-in users with proper role and links
+ * Send push notification for an alert - STRICT VALIDATION
+ * ONLY sends to the exact logged-in user who owns the alert
  */
 const sendAlertPushNotification = async (req, res, next) => {
   try {
@@ -179,36 +179,15 @@ const sendAlertPushNotification = async (req, res, next) => {
       return res.status(400).json({ error: "Alert and userId are required" });
     }
 
-    // Get user document
-    // CRITICAL: userId can be UID or canonical ID, we need to find the user document
+    // CRITICAL STEP 1: Get user document by EXACT document ID
+    // userId = document ID in users collection = studentId or parentId
+    // NO FALLBACK QUERIES - must match exactly
     let userDoc = await firestore.collection('users').doc(userId).get();
     
+    // Only allow alternative for admin/developer
     if (!userDoc.exists && (role === 'admin' || role === 'developer')) {
       const altId = role === 'admin' ? 'Admin' : 'Developer';
       userDoc = await firestore.collection('users').doc(altId).get();
-    }
-    
-    // Try querying by UID if still not found (userId might be canonical ID)
-    if (!userDoc.exists) {
-      const querySnapshot = await firestore.collection('users')
-        .where('uid', '==', userId)
-        .limit(1)
-        .get();
-      if (!querySnapshot.empty) {
-        userDoc = querySnapshot.docs[0];
-      }
-    }
-    
-    // For students/parents, also try querying by studentId/parentId if userId is canonical
-    if (!userDoc.exists && (role === 'student' || role === 'parent')) {
-      const fieldName = role === 'student' ? 'studentId' : 'parentId';
-      const querySnapshot = await firestore.collection('users')
-        .where(fieldName, '==', userId)
-        .limit(1)
-        .get();
-      if (!querySnapshot.empty) {
-        userDoc = querySnapshot.docs[0];
-      }
     }
 
     if (!userDoc.exists) {
@@ -217,56 +196,76 @@ const sendAlertPushNotification = async (req, res, next) => {
     
     const userData = userDoc.data();
     
-    // CRITICAL: User must be logged in
-    if (!userData?.role || !userData?.uid || !userData?.fcmToken) {
-      return res.status(403).json({ error: "User not logged in" });
+    // CRITICAL STEP 2: Verify document ID matches user's ID field
+    if (role === 'student') {
+      const userStudentId = userData.studentId;
+      if (!userStudentId) {
+        return res.status(403).json({ error: "User has no studentId" });
+      }
+      const normalizedUserStudentId = String(userStudentId).replace(/-/g, '').trim().toLowerCase();
+      const normalizedUserId = String(userId).replace(/-/g, '').trim().toLowerCase();
+      if (normalizedUserStudentId !== normalizedUserId) {
+        return res.status(403).json({ error: "Document ID doesn't match user's studentId" });
+      }
+    } else if (role === 'parent') {
+      const userParentId = userData.parentId || userData.parentIdNumber;
+      if (!userParentId) {
+        return res.status(403).json({ error: "User has no parentId" });
+      }
+      const normalizedUserParentId = String(userParentId).replace(/-/g, '').trim().toLowerCase();
+      const normalizedUserId = String(userId).replace(/-/g, '').trim().toLowerCase();
+      if (normalizedUserParentId !== normalizedUserId) {
+        return res.status(403).json({ error: "Document ID doesn't match user's parentId" });
+      }
+    } else if (role === 'admin') {
+      if (userId !== 'Admin' && userId !== userData.uid) {
+        return res.status(403).json({ error: "Admin userId doesn't match" });
+      }
     }
     
-    // Must have login timestamp (proves user has logged in)
+    // CRITICAL STEP 3: User MUST be logged in
+    if (!userData?.role) {
+      return res.status(403).json({ error: "User not logged in - no role" });
+    }
+    
+    if (!userData?.uid) {
+      return res.status(403).json({ error: "User not logged in - no uid" });
+    }
+    
+    if (!userData?.fcmToken) {
+      return res.status(403).json({ error: "User not registered for notifications" });
+    }
+    
     const lastLoginAt = userData?.lastLoginAt || userData?.pushTokenUpdatedAt;
     if (!lastLoginAt) {
-      return res.status(403).json({ error: "User not logged in" });
+      return res.status(403).json({ error: "User never logged in" });
     }
     
-    // Role must match
     if (String(userData.role).toLowerCase() !== role) {
       return res.status(403).json({ error: "Role mismatch" });
     }
     
-    // CRITICAL: Validate alert target matches userId
-    // userId can be UID or canonical ID, alert.parentId/studentId can also be either
+    // CRITICAL STEP 4: Verify alert belongs to this user
     if (role === 'student') {
       const alertStudentId = alert.studentId || alert.student_id;
       if (alertStudentId) {
-        // Normalize both IDs for comparison
-        const normalizedAlertStudentId = String(alertStudentId).replace(/-/g, '').trim();
-        const normalizedUserId = String(userId).replace(/-/g, '').trim();
-        const normalizedUserStudentId = String(userData?.studentId || '').replace(/-/g, '').trim();
-        // Check if alert is for this student
-        if (normalizedAlertStudentId !== normalizedUserId && 
-            normalizedAlertStudentId !== normalizedUserStudentId &&
-            alertStudentId !== userId &&
-            alertStudentId !== userData?.studentId) {
-          return res.status(403).json({ error: "Alert not for this student" });
+        const normalizedAlertStudentId = String(alertStudentId).replace(/-/g, '').trim().toLowerCase();
+        const normalizedUserId = String(userId).replace(/-/g, '').trim().toLowerCase();
+        if (normalizedAlertStudentId !== normalizedUserId) {
+          return res.status(403).json({ error: "Alert doesn't belong to this student" });
         }
       }
     } else if (role === 'parent') {
       const alertParentId = alert.parentId || alert.parent_id;
       if (alertParentId) {
-        // Normalize both IDs for comparison
-        const normalizedAlertParentId = String(alertParentId).replace(/-/g, '').trim();
-        const normalizedUserId = String(userId).replace(/-/g, '').trim();
-        const normalizedUserParentId = String(userData?.parentId || '').replace(/-/g, '').trim();
-        // Check if alert is for this parent
-        if (normalizedAlertParentId !== normalizedUserId && 
-            normalizedAlertParentId !== normalizedUserParentId &&
-            alertParentId !== userId &&
-            alertParentId !== userData?.parentId) {
-          return res.status(403).json({ error: "Alert not for this parent" });
+        const normalizedAlertParentId = String(alertParentId).replace(/-/g, '').trim().toLowerCase();
+        const normalizedUserId = String(userId).replace(/-/g, '').trim().toLowerCase();
+        if (normalizedAlertParentId !== normalizedUserId) {
+          return res.status(403).json({ error: "Alert doesn't belong to this parent" });
         }
       }
       
-      // For parent alerts, also verify link to student
+      // Verify link to student
       if (alert.studentId) {
         const linkQuery = await firestore.collection('parent_student_links')
           .where('parentId', '==', userData.uid)
