@@ -176,72 +176,9 @@ dependencies {
     }
 }
 
-// Copy google-services.json to release/debug directories if not already present
-// Files should be in src/release/ and src/debug/ directories, but this serves as a fallback
-task copyGoogleServices {
-    doLast {
-        def targetFile = new File(projectDir, "src/release/google-services.json")
-        if (targetFile.exists()) {
-            println "✅ google-services.json already exists in src/release/"
-            return
-        }
-        
-        def projectRoot = projectDir.parentFile.parentFile
-        def possibleSources = [
-            new File(projectDir, "google-services.json"),
-            new File(projectRoot, "google-services.json")
-        ]
-        
-        def sourceFile = possibleSources.find { it.exists() }
-        def targetDir = new File(projectDir, "src/release")
-        
-        if (sourceFile) {
-            targetDir.mkdirs()
-            copy {
-                from sourceFile
-                into targetDir
-            }
-            println "✅ Copied google-services.json from ${sourceFile.absolutePath} to ${targetDir.absolutePath}"
-        } else {
-            println "⚠️  WARNING: google-services.json not found. Expected at: ${targetFile.absolutePath}"
-        }
-    }
-}
-
-task copyGoogleServicesDebug {
-    doLast {
-        def targetFile = new File(projectDir, "src/debug/google-services.json")
-        if (targetFile.exists()) {
-            println "✅ google-services.json already exists in src/debug/"
-            return
-        }
-        
-        def projectRoot = projectDir.parentFile.parentFile
-        def possibleSources = [
-            new File(projectDir, "google-services.json"),
-            new File(projectRoot, "google-services.json")
-        ]
-        
-        def sourceFile = possibleSources.find { it.exists() }
-        def targetDir = new File(projectDir, "src/debug")
-        
-        if (sourceFile) {
-            targetDir.mkdirs()
-            copy {
-                from sourceFile
-                into targetDir
-            }
-            println "✅ Copied google-services.json from ${sourceFile.absolutePath} to ${targetDir.absolutePath}"
-        } else {
-            println "⚠️  WARNING: google-services.json not found. Expected at: ${targetFile.absolutePath}"
-        }
-    }
-}
-
-// Run copy tasks before preBuild (as fallback only)
-preBuild.dependsOn copyGoogleServices
-preBuild.dependsOn copyGoogleServicesDebug
-
 // CRITICAL: Always apply Google Services plugin for Firebase to work
 // This processes google-services.json and auto-initializes Firebase
+// The google-services.json files are already committed in:
+//   - android/app/src/release/google-services.json
+//   - android/app/src/debug/google-services.json
 apply plugin: 'com.google.gms.google-services'
