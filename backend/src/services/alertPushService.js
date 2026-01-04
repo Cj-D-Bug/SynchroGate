@@ -490,10 +490,9 @@ const initializeAdminAlertsListener = () => {
             return; // Invalid timestamp
           }
           
-          const timeSinceLogin = now - lastLoginTime;
-          
-          // Only include if user logged in within last 10 minutes (user is currently logged in)
-          if (timeSinceLogin <= TEN_MINUTES) {
+          // No time window check - if they have a token, they can receive notifications
+          // Real-time filtering is handled by alert creation time check
+          if (true) {
             const userId = doc.id === 'Admin' ? 'Admin' : (userData?.uid || doc.id);
             adminUserIds.push(userId);
           }
