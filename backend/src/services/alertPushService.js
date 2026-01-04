@@ -213,6 +213,7 @@ const initializeStudentAlertsListener = () => {
   
   let previousStudentAlerts = new Map(); // studentId -> Set of alert IDs
   let isInitialSnapshot = true;
+  const listenerStartTime = Date.now(); // Track when listener started
   
   const studentAlertsCollection = firestore.collection('student_alerts');
   
@@ -226,6 +227,7 @@ const initializeStudentAlertsListener = () => {
         previousStudentAlerts.set(studentId, alertIds);
       });
       isInitialSnapshot = false;
+      console.log(`✅ Student alerts listener initialized at ${new Date(listenerStartTime).toISOString()}`);
       return;
     }
     
@@ -237,24 +239,67 @@ const initializeStudentAlertsListener = () => {
         const previousAlertIds = previousStudentAlerts.get(studentId) || new Set();
         const currentAlertIds = new Set();
         
-        // Find new unread alerts
+        // Find new unread alerts that:
+        // 1. Are not in previous set (actually new)
+        // 2. Were created AFTER listener started (not old alerts)
         const newAlerts = items.filter(item => {
           const alertId = item.id || item.alertId;
-          if (item.status === 'unread' && alertId && !previousAlertIds.has(alertId)) {
+          if (item.status !== 'unread' || !alertId || previousAlertIds.has(alertId)) {
+            return false; // Skip if read, no ID, or already seen
+          }
+          
+          // CRITICAL: Check if alert was created AFTER listener started
+          let alertTime = null;
+          try {
+            // Try to extract timestamp from alert ID
+            if (typeof alertId === 'string' && alertId.includes('_')) {
+              const parts = alertId.split('_');
+              for (const part of parts) {
+                const num = parseInt(part, 10);
+                if (!isNaN(num) && num > 1000000000000) {
+                  alertTime = num;
+                  break;
+                }
+              }
+            }
+            
+            // If no timestamp in ID, try createdAt
+            if (!alertTime && item.createdAt) {
+              if (typeof item.createdAt === 'string') {
+                alertTime = new Date(item.createdAt).getTime();
+              } else if (item.createdAt.toMillis) {
+                alertTime = item.createdAt.toMillis();
+              } else if (item.createdAt.seconds) {
+                alertTime = item.createdAt.seconds * 1000;
+              }
+            }
+          } catch (e) {
+            // Ignore parsing errors
+          }
+          
+          // Only send if alert was created AFTER listener started
+          if (alertTime && alertTime > listenerStartTime) {
             currentAlertIds.add(alertId);
             return true;
+          } else if (!alertTime) {
+            console.log(`⏭️ Skipping alert ${alertId} - cannot determine creation time`);
+            return false;
+          } else {
+            console.log(`⏭️ Skipping alert ${alertId} - created before listener started`);
+            return false;
           }
-          return false;
         });
         
-        previousStudentAlerts.set(studentId, currentAlertIds);
+        // Update previous set with ALL current alert IDs
+        const allCurrentAlertIds = new Set(items.map(item => item.id || item.alertId).filter(Boolean));
+        previousStudentAlerts.set(studentId, allCurrentAlertIds);
         
         // CRITICAL: Only send to this specific student (document ID)
-        // Ensure alert has studentId matching document ID
         for (const alert of newAlerts) {
           if (!alert.studentId) {
-            alert.studentId = studentId; // Set it to match document ID
+            alert.studentId = studentId;
           }
+          console.log(`📨 Processing NEW alert for student ${studentId}: ${alert.id || alert.alertId}`);
           await sendPushForAlert(alert, 'student', studentId);
         }
       }
