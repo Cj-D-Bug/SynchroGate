@@ -8,7 +8,8 @@ WORKDIR /app/backend
 COPY backend/package*.json ./
 
 # Install ALL dependencies (including devDependencies)
-RUN npm install --production=false
+# Clear npm cache to ensure fresh install
+RUN npm cache clean --force && npm install --production=false
 
 # Copy the rest of the backend source code
 COPY backend/ ./
