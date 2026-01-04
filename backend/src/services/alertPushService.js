@@ -3,6 +3,9 @@
 const { firestore, admin } = require('../config/firebase');
 const pushService = require('./pushService');
 
+// Constants
+const TEN_MINUTES = 10 * 60 * 1000; // EXTREMELY strict: only 10 minutes for login validation
+
 let alertListeners = {
   student: null,
   parent: null,
@@ -219,7 +222,6 @@ const sendPushForAlert = async (alert, role, userId) => {
     }
     
     const timeSinceLogin = now - lastLoginTime;
-    const TEN_MINUTES = 10 * 60 * 1000; // EXTREMELY strict: only 10 minutes
     
     // If user logged in more than 10 minutes ago, they're likely not active
     if (timeSinceLogin > TEN_MINUTES) {
@@ -271,7 +273,6 @@ const sendPushForAlert = async (alert, role, userId) => {
     }
     
     const timeSinceTokenUpdate = now - tokenUpdateTime;
-    const TEN_MINUTES = 10 * 60 * 1000; // EXTREMELY strict: only 10 minutes
     
     // If token is older than 10 minutes, user is likely not logged in
     if (timeSinceTokenUpdate > TEN_MINUTES) {
