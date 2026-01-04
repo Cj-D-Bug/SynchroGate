@@ -189,18 +189,26 @@ export default function usePushNotifications() {
           
           // CRITICAL: Only save FCM token if user is FULLY logged in
           // Must have: role AND uid (not on role selection screen)
+          // This check is redundant but extra safety
           if (!user?.role || !user?.uid) {
-            console.log('⚠️ Skipping FCM token save - user not fully logged in');
+            console.log('⚠️ Skipping FCM token save - user not fully logged in (missing role or UID)');
             return null;
           }
           
-          // Save FCM token with login timestamp
+          // Validate role is valid
+          const roleLower = String(user.role).toLowerCase();
+          if (!['student', 'parent', 'admin', 'developer'].includes(roleLower)) {
+            console.log('⚠️ Skipping FCM token save - invalid role:', roleLower);
+            return null;
+          }
+          
+          // Save FCM token with login timestamp (this proves user is logged in)
           const now = new Date().toISOString();
           const tokenData = {
             fcmToken: fcmToken,
             pushTokenType: 'fcm',
             pushTokenUpdatedAt: now,
-            lastLoginAt: now, // Track when user logged in
+            lastLoginAt: now, // CRITICAL: Track when user logged in - backend checks this is recent
             role: user.role,
             uid: user.uid,
             parentId: canonicalParentId || user.parentId || null,
@@ -208,7 +216,7 @@ export default function usePushNotifications() {
           };
           
           await setDoc(userRef, tokenData, { merge: true });
-          console.log('✅ FCM token saved for logged-in user:', { role: user.role, uid: user.uid });
+          console.log('✅ FCM token saved for logged-in user:', { role: user.role, uid: user.uid, timestamp: now });
 
           console.log('✅ FCM token saved to Firestore:', {
             savedUnder: targetDocId,

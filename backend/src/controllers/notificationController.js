@@ -209,8 +209,37 @@ const sendAlertPushNotification = async (req, res, next) => {
     }
     
     // Must have login timestamp
-    if (!userData?.lastLoginAt && !userData?.pushTokenUpdatedAt) {
+    const lastLoginAt = userData?.lastLoginAt || userData?.pushTokenUpdatedAt;
+    if (!lastLoginAt) {
       return res.status(403).json({ error: "User not logged in" });
+    }
+    
+    // CRITICAL: Validate login timestamp is recent (within last 24 hours)
+    const now = Date.now();
+    let loginTime = null;
+    try {
+      if (lastLoginAt.toMillis) {
+        loginTime = lastLoginAt.toMillis();
+      } else if (lastLoginAt.seconds) {
+        loginTime = lastLoginAt.seconds * 1000;
+      } else if (typeof lastLoginAt === 'string') {
+        loginTime = new Date(lastLoginAt).getTime();
+      } else if (typeof lastLoginAt === 'number') {
+        loginTime = lastLoginAt;
+      }
+    } catch (err) {
+      return res.status(403).json({ error: "Invalid login timestamp" });
+    }
+    
+    if (!loginTime || isNaN(loginTime) || loginTime <= 0) {
+      return res.status(403).json({ error: "Invalid login timestamp" });
+    }
+    
+    // Check if login is recent (within last 24 hours)
+    const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+    const timeSinceLogin = now - loginTime;
+    if (timeSinceLogin > TWENTY_FOUR_HOURS) {
+      return res.status(403).json({ error: "User not logged in", message: "Please log in again" });
     }
     
     // Role must match
