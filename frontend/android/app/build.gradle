@@ -176,6 +176,26 @@ dependencies {
     }
 }
 
+// Copy google-services.json from root to app directory if it doesn't exist
+task copyGoogleServices(type: Copy) {
+    description = 'Copy google-services.json from project root to app directory'
+    from rootProject.file('../google-services.json')
+    into file('src/release')
+    onlyIf { !file('src/release/google-services.json').exists() }
+}
+
+// Also copy to app root
+task copyGoogleServicesToApp(type: Copy) {
+    description = 'Copy google-services.json from project root to app root'
+    from rootProject.file('../google-services.json')
+    into file('.')
+    onlyIf { !file('google-services.json').exists() }
+}
+
+// Run copy tasks before processing Google Services
+preBuild.dependsOn copyGoogleServices
+preBuild.dependsOn copyGoogleServicesToApp
+
 // CRITICAL: Always apply Google Services plugin for Firebase to work
 // This processes google-services.json and auto-initializes Firebase
 // The google-services.json files are already committed in:
