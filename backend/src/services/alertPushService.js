@@ -74,10 +74,22 @@ const sendPushForAlert = async (alert, role, userId) => {
       userDoc = await firestore.collection('users').doc(altId).get();
     }
     
-    // Try querying by UID if still not found
+    // Try querying by UID if still not found (userId might be canonical ID)
     if (!userDoc.exists) {
       const querySnapshot = await firestore.collection('users')
         .where('uid', '==', userId)
+        .limit(1)
+        .get();
+      if (!querySnapshot.empty) {
+        userDoc = querySnapshot.docs[0];
+      }
+    }
+    
+    // For students/parents, also try querying by studentId/parentId if userId is canonical
+    if (!userDoc.exists && (role === 'student' || role === 'parent')) {
+      const fieldName = role === 'student' ? 'studentId' : 'parentId';
+      const querySnapshot = await firestore.collection('users')
+        .where(fieldName, '==', userId)
         .limit(1)
         .get();
       if (!querySnapshot.empty) {
