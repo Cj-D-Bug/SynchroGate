@@ -4,9 +4,12 @@ const path = require("path");
 dotenv.config({ path: path.join(__dirname, "../../.env") });
 
 // Debug: Log all environment variables (for troubleshooting)
-console.log("🔍 Debug: Checking environment variables...");
-console.log("🔍 Total env vars:", Object.keys(process.env).length);
-console.log("🔍 All env var names:", Object.keys(process.env).slice(0, 20).join(", "), "...");
+// Only log in development to reduce noise in production
+if (process.env.NODE_ENV !== 'production') {
+  console.log("🔍 Debug: Checking environment variables...");
+  console.log("🔍 Total env vars:", Object.keys(process.env).length);
+  console.log("🔍 All env var names:", Object.keys(process.env).slice(0, 20).join(", "), "...");
+}
 console.log("🔍 Available env vars (FIREBASE/JWT):", Object.keys(process.env).filter(k => k.includes("FIREBASE") || k.includes("JWT")).join(", ") || "NONE FOUND");
 console.log("🔍 FIREBASE_SERVICE_ACCOUNT_JSON exists:", !!process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
 console.log("🔍 FIREBASE_SERVICE_ACCOUNT_JSON length:", process.env.FIREBASE_SERVICE_ACCOUNT_JSON ? process.env.FIREBASE_SERVICE_ACCOUNT_JSON.length : 0);

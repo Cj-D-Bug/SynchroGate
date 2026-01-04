@@ -43,9 +43,28 @@ app.use(express.json());
 // Use morgan only in development, or use 'combined' format in production
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
-// Health check endpoint
+// Health check endpoints (Railway checks these)
 app.get('/', (req, res) => {
-  res.json({ message: 'GuardianEntry API is running 🚀' });
+  res.status(200).json({ 
+    status: 'ok',
+    message: 'GuardianEntry API is running 🚀',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
+// Additional health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'healthy',
+    service: 'GuardianEntry API',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    memory: {
+      used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + ' MB',
+      total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + ' MB'
+    }
+  });
 });
 
 // Mount routes with /api prefix
@@ -72,6 +91,30 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 8000;
 
+// Add process error handlers to prevent crashes
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  console.error('Stack:', error.stack);
+  // Don't exit - let Railway handle it
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit - let Railway handle it
+});
+
+// Handle SIGTERM gracefully (Railway sends this when stopping)
+process.on('SIGTERM', () => {
+  console.log('⚠️ SIGTERM received, shutting down gracefully...');
+  process.exit(0);
+});
+
+// Handle SIGINT gracefully
+process.on('SIGINT', () => {
+  console.log('⚠️ SIGINT received, shutting down gracefully...');
+  process.exit(0);
+});
+
 async function startServer() {
   try {
     console.log('🔄 Starting server...');
@@ -81,10 +124,28 @@ async function startServer() {
     // Firebase is already initialized in config/firebase.js
     console.log('✅ Firebase connected');
 
-    app.listen(PORT, '0.0.0.0', () => {
+    const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`🌐 Health check: http://0.0.0.0:${PORT}/`);
+      console.log(`✅ Server is ready to accept connections`);
     });
+
+    // Handle server errors
+    server.on('error', (error) => {
+      if (error.syscall !== 'listen') {
+        throw error;
+      }
+      console.error('❌ Server error:', error);
+    });
+
+    // Keep the process alive
+    setInterval(() => {
+      // Periodic heartbeat to ensure process stays alive
+      if (server.listening) {
+        console.log('💓 Server heartbeat - still running');
+      }
+    }, 30000); // Every 30 seconds
+
   } catch (error) {
     console.error('❌ Failed to start server:', error);
     console.error('Error details:', error.message);
