@@ -30,28 +30,30 @@ export const AuthProvider = ({ children }) => {
   const parentPrevSchedulesRef = React.useRef({}); // sid -> Map(subject|day -> time)
   const parentPrevSchedulesInitializedRef = React.useRef({}); // sid -> boolean
 
-  // Initialize global push notifications when user logs in
-  useEffect(() => {
-    if (user && role) {
-      console.log('🔔 Setting up global push notifications for:', { role, uid: user.uid });
-      
-      if (role === 'student' && user.studentId) {
-        initializeGlobalPushNotifications(user);
-      } else if (role === 'parent') {
-        initializeGlobalParentPushNotifications(user);
-      }
-    } else {
-      console.log('🔔 Cleaning up global push notifications');
-      cleanupGlobalPushNotifications();
-      cleanupGlobalParentPushNotifications();
-    }
+  // DISABLED: Frontend push notification listeners are disabled
+  // Backend now handles all push notifications automatically via alertPushService
+  // This prevents duplicate notifications and ensures proper validation
+  // useEffect(() => {
+  //   if (user && role) {
+  //     console.log('🔔 Setting up global push notifications for:', { role, uid: user.uid });
+  //     
+  //     if (role === 'student' && user.studentId) {
+  //       initializeGlobalPushNotifications(user);
+  //     } else if (role === 'parent') {
+  //       initializeGlobalParentPushNotifications(user);
+  //     }
+  //   } else {
+  //     console.log('🔔 Cleaning up global push notifications');
+  //     cleanupGlobalPushNotifications();
+  //     cleanupGlobalParentPushNotifications();
+  //   }
 
-    // Cleanup on unmount
-    return () => {
-      cleanupGlobalPushNotifications();
-      cleanupGlobalParentPushNotifications();
-    };
-  }, [user, role]);
+  //   // Cleanup on unmount
+  //   return () => {
+  //     cleanupGlobalPushNotifications();
+  //     cleanupGlobalParentPushNotifications();
+  //   };
+  // }, [user, role]);
 
   // === GENERATE PARENT ID - FIXED VERSION ===
   const generateParentId = () => {

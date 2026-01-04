@@ -235,16 +235,17 @@ function AppContent() {
         console.log('   App will continue to work without push notifications');
       });
       
-      // SAFE: Initialize global push notifications with error handling
-      try {
-        const role = String(user.role || '').toLowerCase();
-        if (role === 'student' || role === 'parent' || role === 'admin') {
-          initializeGlobalPushNotifications(user);
-        }
-      } catch (globalPushError) {
-        console.error('❌ Failed to initialize global push notifications:', globalPushError);
-        // Don't crash - just log the error
-      }
+          // DISABLED: Frontend push notification listeners are disabled
+          // Backend now handles all push notifications automatically via alertPushService
+          // This prevents duplicate notifications and ensures proper validation
+          // try {
+          //   const role = String(user.role || '').toLowerCase();
+          //   if (role === 'student' || role === 'parent' || role === 'admin') {
+          //     initializeGlobalPushNotifications(user);
+          //   }
+          // } catch (globalPushError) {
+          //   console.error('❌ Failed to initialize global push notifications:', globalPushError);
+          // }
     }
     
     // SAFE: Wrap utility functions in try-catch
@@ -260,19 +261,11 @@ function AppContent() {
       console.error('❌ Failed to configure full screen:', fullScreenError);
     }
     
-    // Cleanup on unmount
-    return () => {
-      if (user) {
-        try {
-          const role = String(user.role || '').toLowerCase();
-          if (role === 'student' || role === 'parent' || role === 'admin') {
-            cleanupGlobalPushNotifications();
-          }
-        } catch (cleanupError) {
-          console.error('❌ Failed to cleanup global push notifications:', cleanupError);
-        }
-      }
-    };
+        // Cleanup on unmount (disabled - frontend listeners are disabled)
+        return () => {
+          // Frontend listeners are disabled - backend handles everything
+          // cleanupGlobalPushNotifications();
+        };
   }, [user]);
 
   return (
