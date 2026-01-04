@@ -533,35 +533,38 @@ const initializeAdminAlertsListener = () => {
             return; // Skip if not authenticated
           }
           
-          // Check 4: FCM token was updated recently
-          const pushTokenUpdatedAt = userData?.pushTokenUpdatedAt;
-          if (!pushTokenUpdatedAt) {
-            return; // Skip admins without timestamp
+          // Check 4: User must have logged in recently (lastLoginAt within last 10 minutes)
+          const lastLoginAt = userData?.lastLoginAt || userData?.pushTokenUpdatedAt;
+          if (!lastLoginAt) {
+            return; // Skip admins without login timestamp
           }
           
           // Handle different timestamp formats
-          let tokenUpdateTime;
-          if (pushTokenUpdatedAt.toMillis) {
-            tokenUpdateTime = pushTokenUpdatedAt.toMillis();
-          } else if (pushTokenUpdatedAt.seconds) {
-            tokenUpdateTime = pushTokenUpdatedAt.seconds * 1000;
-          } else if (typeof pushTokenUpdatedAt === 'string') {
-            tokenUpdateTime = new Date(pushTokenUpdatedAt).getTime();
-          } else if (typeof pushTokenUpdatedAt === 'number') {
-            tokenUpdateTime = pushTokenUpdatedAt;
-          } else {
-            return; // Invalid format
-          }
-          
-          if (isNaN(tokenUpdateTime) || tokenUpdateTime <= 0) {
+          let lastLoginTime;
+          try {
+            if (lastLoginAt.toMillis) {
+              lastLoginTime = lastLoginAt.toMillis();
+            } else if (lastLoginAt.seconds) {
+              lastLoginTime = lastLoginAt.seconds * 1000;
+            } else if (typeof lastLoginAt === 'string') {
+              lastLoginTime = new Date(lastLoginAt).getTime();
+            } else if (typeof lastLoginAt === 'number') {
+              lastLoginTime = lastLoginAt;
+            } else {
+              return; // Invalid format
+            }
+          } catch (err) {
             return; // Invalid timestamp
           }
           
-          const timeSinceTokenUpdate = now - tokenUpdateTime;
-          const FIFTEEN_MINUTES = 15 * 60 * 1000; // EXTREMELY strict: only 15 minutes
+          if (isNaN(lastLoginTime) || lastLoginTime <= 0 || lastLoginTime > now + 60000) {
+            return; // Invalid timestamp
+          }
           
-          // Only include if token was updated within last 15 minutes (user is currently logged in)
-          if (timeSinceTokenUpdate <= FIFTEEN_MINUTES) {
+          const timeSinceLogin = now - lastLoginTime;
+          
+          // Only include if user logged in within last 10 minutes (user is currently logged in)
+          if (timeSinceLogin <= TEN_MINUTES) {
             const userId = doc.id === 'Admin' ? 'Admin' : (userData?.uid || doc.id);
             adminUserIds.push(userId);
           }
