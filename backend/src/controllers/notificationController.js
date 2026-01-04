@@ -190,22 +190,60 @@ const sendAlertPushNotification = async (req, res, next) => {
     }
 
     // Get user's FCM token from Firestore
-    console.log(`🔍 Looking up FCM token for user: ${userId}`);
+    // For admin/developer users, the document ID might be "Admin" or "Developer" instead of UID
+    console.log(`🔍 Looking up FCM token for user: ${userId}, role: ${role}`);
     let userDoc = null;
+    let userData = null;
+    
     try {
+      // Try the provided userId first
       userDoc = await firestore.collection('users').doc(userId).get();
-      console.log(`📄 User document exists: ${userDoc.exists}`);
+      console.log(`📄 User document exists (by userId): ${userDoc.exists}`);
+      
+      // If not found and role is admin/developer, try alternative document IDs
+      if (!userDoc.exists && (role === 'admin' || role === 'developer')) {
+        const alternativeIds = role === 'admin' ? ['Admin', 'admin'] : ['Developer', 'developer'];
+        for (const altId of alternativeIds) {
+          const altDoc = await firestore.collection('users').doc(altId).get();
+          if (altDoc.exists) {
+            console.log(`📄 Found user document with alternative ID: ${altId}`);
+            userDoc = altDoc;
+            break;
+          }
+        }
+      }
+      
+      // If still not found, try querying by UID
+      if (!userDoc.exists) {
+        console.log(`📄 Trying to find user by UID: ${userId}`);
+        const querySnapshot = await firestore.collection('users')
+          .where('uid', '==', userId)
+          .limit(1)
+          .get();
+        
+        if (!querySnapshot.empty) {
+          userDoc = querySnapshot.docs[0];
+          console.log(`📄 Found user document by UID query: ${userDoc.id}`);
+        }
+      }
     } catch (err) {
       console.error('❌ Error fetching user document:', err);
       return res.status(500).json({ error: "Failed to fetch user document", details: err.message });
     }
 
     if (!userDoc || !userDoc.exists) {
-      console.log(`⚠️ User document not found for userId: ${userId}`);
-      return res.status(404).json({ error: "User not found" });
+      console.log(`⚠️ User document not found for userId: ${userId}, role: ${role}`);
+      console.log(`   Tried: direct lookup, alternative IDs (${role}), and UID query`);
+      return res.status(404).json({ 
+        error: "User not found",
+        message: `Could not find user document for ${userId}. Please ensure the user has logged in and has an FCM token.`
+      });
     }
+    
+    // Get data from document (handle both DocumentSnapshot and QueryDocumentSnapshot)
+    userData = userDoc.data ? userDoc.data() : (userDoc.exists ? userDoc.data() : null);
 
-    const userData = userDoc.data();
+    // userData is already set above
     const fcmToken = userData?.fcmToken;
 
     console.log(`🔑 FCM token status:`, {
