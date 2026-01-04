@@ -176,37 +176,79 @@ dependencies {
     }
 }
 
-// Copy google-services.json from root to app directory if it doesn't exist
-task copyGoogleServices(type: Copy) {
-    description = 'Copy google-services.json from project root to app directory'
-    from rootProject.file('../google-services.json')
-    into file('src/release')
-    onlyIf { !file('src/release/google-services.json').exists() }
-}
-
-// Also copy to app root
-task copyGoogleServicesToApp(type: Copy) {
-    description = 'Copy google-services.json from project root to app root'
-    from rootProject.file('../google-services.json')
-    into file('.')
-    onlyIf { !file('google-services.json').exists() }
-}
-
 // CRITICAL: Always apply Google Services plugin for Firebase to work
 // This processes google-services.json and auto-initializes Firebase
-// The google-services.json files are already committed in:
-//   - android/app/src/release/google-services.json
-//   - android/app/src/debug/google-services.json
 apply plugin: 'com.google.gms.google-services'
 
-// Ensure copy tasks run before Google Services processing
+// Task to ensure google-services.json exists in required locations
+task ensureGoogleServices {
+    description = 'Ensure google-services.json exists in all required locations'
+    doLast {
+        def googleServicesJson = '''{
+  "project_info": {
+    "project_number": "149886535931",
+    "project_id": "guardientry-database",
+    "storage_bucket": "guardientry-database.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:149886535931:android:243864d268dc9f2969085e",
+        "android_client_info": {
+          "package_name": "com.palabay.synchrogate"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCdA0Z1u6yVAvIxwWoehTVyLIBzfCV9VTY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}'''
+        
+        // Try to read from source file first
+        def sourceFile = rootProject.file('../google-services.json')
+        def content = googleServicesJson
+        if (sourceFile.exists()) {
+            content = sourceFile.text
+            println "✅ Using google-services.json from: ${sourceFile.absolutePath}"
+        } else {
+            println "⚠️  Source file not found, using embedded JSON"
+        }
+        
+        // Write to all required locations
+        def locations = [
+            file('google-services.json'),
+            file('src/release/google-services.json'),
+            file('src/debug/google-services.json')
+        ]
+        
+        locations.each { targetFile ->
+            targetFile.parentFile.mkdirs()
+            targetFile.text = content
+            println "✅ Created: ${targetFile.absolutePath}"
+        }
+    }
+}
+
+// Ensure this task runs before Google Services processing
 afterEvaluate {
     tasks.named('processReleaseGoogleServices').configure {
-        dependsOn copyGoogleServices
-        dependsOn copyGoogleServicesToApp
+        dependsOn ensureGoogleServices
     }
     tasks.named('processDebugGoogleServices').configure {
-        dependsOn copyGoogleServices
-        dependsOn copyGoogleServicesToApp
+        dependsOn ensureGoogleServices
+    }
+    // Also run before preBuild to ensure file exists early
+    tasks.named('preBuild').configure {
+        dependsOn ensureGoogleServices
     }
 }
