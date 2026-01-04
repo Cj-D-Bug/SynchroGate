@@ -276,6 +276,7 @@ const initializeParentAlertsListener = () => {
   
   let previousParentAlerts = new Map(); // parentId -> Set of alert IDs
   let isInitialParentSnapshot = true;
+  const listenerStartTime = Date.now(); // Track when listener started
   
   const parentAlertsCollection = firestore.collection('parent_alerts');
   
@@ -289,6 +290,7 @@ const initializeParentAlertsListener = () => {
         previousParentAlerts.set(parentId, alertIds);
       });
       isInitialParentSnapshot = false;
+      console.log(`✅ Parent alerts listener initialized at ${new Date(listenerStartTime).toISOString()}`);
       return;
     }
     
@@ -300,17 +302,64 @@ const initializeParentAlertsListener = () => {
         const previousAlertIds = previousParentAlerts.get(parentId) || new Set();
         const currentAlertIds = new Set();
         
-        // Find new unread alerts
+        // Find new unread alerts that:
+        // 1. Are not in previous set (actually new)
+        // 2. Were created AFTER listener started (not old alerts)
         const newAlerts = items.filter(item => {
           const alertId = item.id || item.alertId;
-          if (item.status === 'unread' && alertId && !previousAlertIds.has(alertId)) {
-            currentAlertIds.add(alertId);
-            return true;
+          if (item.status !== 'unread' || !alertId || previousAlertIds.has(alertId)) {
+            return false; // Skip if read, no ID, or already seen
           }
-          return false;
+          
+          // CRITICAL: Check if alert was created AFTER listener started
+          // Extract timestamp from alert ID or use createdAt
+          let alertTime = null;
+          try {
+            // Try to extract timestamp from alert ID (format: prefix_timestamp_random)
+            if (typeof alertId === 'string' && alertId.includes('_')) {
+              const parts = alertId.split('_');
+              // Look for numeric timestamp in the ID
+              for (const part of parts) {
+                const num = parseInt(part, 10);
+                if (!isNaN(num) && num > 1000000000000) { // Valid timestamp (milliseconds)
+                  alertTime = num;
+                  break;
+                }
+              }
+            }
+            
+            // If no timestamp in ID, try createdAt
+            if (!alertTime && item.createdAt) {
+              if (typeof item.createdAt === 'string') {
+                alertTime = new Date(item.createdAt).getTime();
+              } else if (item.createdAt.toMillis) {
+                alertTime = item.createdAt.toMillis();
+              } else if (item.createdAt.seconds) {
+                alertTime = item.createdAt.seconds * 1000;
+              }
+            }
+          } catch (e) {
+            // Ignore parsing errors
+          }
+          
+          // Only send if alert was created AFTER listener started
+          if (alertTime && alertTime > listenerStartTime) {
+            currentAlertIds.add(alertId);
+            return true; // This is a new alert created after listener started
+          } else if (!alertTime) {
+            // If we can't determine time, be conservative and skip
+            console.log(`⏭️ Skipping alert ${alertId} - cannot determine creation time`);
+            return false;
+          } else {
+            // Alert is old (created before listener started)
+            console.log(`⏭️ Skipping alert ${alertId} - created before listener started (${new Date(alertTime).toISOString()} < ${new Date(listenerStartTime).toISOString()})`);
+            return false;
+          }
         });
         
-        previousParentAlerts.set(parentId, currentAlertIds);
+        // Update previous set with ALL current alert IDs (not just new ones)
+        const allCurrentAlertIds = new Set(items.map(item => item.id || item.alertId).filter(Boolean));
+        previousParentAlerts.set(parentId, allCurrentAlertIds);
         
         // CRITICAL: Only send to this specific parent (document ID)
         // Ensure alert has parentId matching document ID
@@ -318,6 +367,7 @@ const initializeParentAlertsListener = () => {
           if (!alert.parentId) {
             alert.parentId = parentId; // Set it to match document ID
           }
+          console.log(`📨 Processing NEW alert for parent ${parentId}: ${alert.id || alert.alertId}`);
           await sendPushForAlert(alert, 'parent', parentId);
         }
       }
