@@ -168,9 +168,9 @@ const sendPushForAlert = async (alert, role, userId) => {
         }
       );
       
-      // Mark as notified
-      if (alertId) {
-        notifiedAlerts.set(alertId, now);
+      // Mark as notified (using composite key: alertId + userId)
+      if (deduplicationKey) {
+        notifiedAlerts.set(deduplicationKey, now);
       }
       
       console.log(`✅ Auto-sent push notification for ${role} alert: ${alertId}`);
@@ -278,6 +278,7 @@ const initializeAdminAlertsListener = () => {
   }
   
   const adminAlertsRef = firestore.collection('admin_alerts').doc('inbox');
+  let previousAdminAlertIds = new Set(); // Track previous alert IDs
   
   const unsubscribe = adminAlertsRef.onSnapshot(async (snap) => {
     try {
@@ -286,11 +287,47 @@ const initializeAdminAlertsListener = () => {
       const data = snap.data() || {};
       const items = Array.isArray(data.items) ? data.items : [];
       
-      // Find new unread alerts
-      const unreadAlerts = items.filter(item => item.status === 'unread');
+      const currentAlertIds = new Set();
       
+      // Find NEW unread alerts (not in previous state)
+      const unreadAlerts = items.filter(item => {
+        const alertId = item.id || item.alertId;
+        if (item.status === 'unread' && alertId) {
+          currentAlertIds.add(alertId);
+          // Only send if this is a NEW alert (not in previous state)
+          return !previousAdminAlertIds.has(alertId);
+        }
+        return false;
+      });
+      
+      // Update previous state
+      previousAdminAlertIds = currentAlertIds;
+      
+      // Send push notifications only for NEW alerts
+      // For admin alerts, we need to send to ALL admin users
+      // First, get all admin users
+      const adminUsersSnapshot = await firestore.collection('users')
+        .where('role', '==', 'admin')
+        .get();
+      
+      const adminUserIds = [];
+      adminUsersSnapshot.forEach(doc => {
+        const userData = doc.data();
+        // Try document ID first, then UID
+        const userId = doc.id === 'Admin' ? 'Admin' : (userData?.uid || doc.id);
+        adminUserIds.push(userId);
+      });
+      
+      // If no admin users found, try the 'Admin' document
+      if (adminUserIds.length === 0) {
+        adminUserIds.push('Admin');
+      }
+      
+      // Send notification to each admin user for each new alert
       for (const alert of unreadAlerts) {
-        await sendPushForAlert(alert, 'admin', 'Admin');
+        for (const adminUserId of adminUserIds) {
+          await sendPushForAlert(alert, 'admin', adminUserId);
+        }
       }
     } catch (error) {
       console.error('Error in admin alerts listener:', error);
