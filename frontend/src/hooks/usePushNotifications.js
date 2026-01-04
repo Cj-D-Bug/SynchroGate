@@ -223,17 +223,28 @@ export default function usePushNotifications() {
     if (Platform.OS === 'android') {
       // CRITICAL: Create notification channel for Android
       // This channel must match the channelId used in backend FCM messages
-      await Notifications.setNotificationChannelAsync('default', {
-        name: 'Default Notifications',
-        description: 'Default notification channel for app alerts',
-        importance: Notifications.AndroidImportance.MAX, // Highest priority - shows even when app is closed
-        vibrationPattern: [0, 250, 250, 250],
-        lightColor: '#FF231F7C',
-        sound: 'default',
-        enableVibrate: true,
-        showBadge: true,
-      });
-      console.log('✅ Android notification channel "default" created');
+      // MUST be created before app closes for notifications to work when app is closed
+      try {
+        await Notifications.setNotificationChannelAsync('default', {
+          name: 'Default Notifications',
+          description: 'Default notification channel for app alerts',
+          importance: Notifications.AndroidImportance.MAX, // Highest priority - shows even when app is closed
+          vibrationPattern: [0, 250, 250, 250],
+          lightColor: '#FF231F7C',
+          sound: 'default',
+          enableVibrate: true,
+          showBadge: true,
+          // Critical settings for background notifications
+          lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC, // Show on lock screen
+        });
+        console.log('✅ Android notification channel "default" created with MAX importance');
+        console.log('   - Notifications will show when app is CLOSED');
+        console.log('   - Notifications will show on LOCK SCREEN');
+        console.log('   - Notifications have HIGHEST priority');
+      } catch (channelError) {
+        console.error('❌ Failed to create notification channel:', channelError);
+        // Don't fail completely - try to continue
+      }
     }
 
     return token;

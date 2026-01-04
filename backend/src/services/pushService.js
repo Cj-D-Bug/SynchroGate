@@ -39,7 +39,13 @@ const sendPushNotification = async (fcmToken, title, body, data = {}) => {
           priority: 'high',
           defaultSound: true,
           defaultVibrateTimings: true,
+          visibility: 'public', // Show notification even when device is locked
+          notificationCount: 1, // Badge count
+          clickAction: 'FLUTTER_NOTIFICATION_CLICK', // Action when notification is tapped
         },
+        // Critical: These settings ensure notifications work when app is closed
+        ttl: 86400000, // 24 hours - how long notification is valid
+        collapseKey: 'alert', // Collapse multiple notifications with same key
       },
       apns: {
         payload: {
