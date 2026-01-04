@@ -80,48 +80,20 @@ const sendPushForAlert = async (alert, role, userId) => {
     const userData = userDoc.data();
     
     // STEP 3: CRITICAL - User must be logged in
-    // Must have: role, UID, FCM token, and RECENT login timestamp
+    // Must have: role, UID, FCM token, and login timestamp (proves they logged in)
     if (!userData?.role || !userData?.uid || !userData?.fcmToken) {
-      return; // Not logged in
+      return; // Not logged in - missing required fields
     }
     
-    // Must have login timestamp (lastLoginAt or pushTokenUpdatedAt)
+    // Must have login timestamp (proves user has logged in at least once)
     const lastLoginAt = userData?.lastLoginAt || userData?.pushTokenUpdatedAt;
     if (!lastLoginAt) {
-      return; // Never logged in
+      return; // Never logged in - no timestamp means they never logged in
     }
     
-    // CRITICAL: Validate login timestamp is recent (within last 24 hours)
-    // This ensures user is currently logged in, not just has an old token
-    let loginTime = null;
-    try {
-      if (lastLoginAt.toMillis) {
-        loginTime = lastLoginAt.toMillis();
-      } else if (lastLoginAt.seconds) {
-        loginTime = lastLoginAt.seconds * 1000;
-      } else if (typeof lastLoginAt === 'string') {
-        loginTime = new Date(lastLoginAt).getTime();
-      } else if (typeof lastLoginAt === 'number') {
-        loginTime = lastLoginAt;
-      }
-    } catch (err) {
-      return; // Invalid timestamp format
-    }
-    
-    if (!loginTime || isNaN(loginTime) || loginTime <= 0) {
-      return; // Invalid timestamp
-    }
-    
-    // Check if login is recent (within last 24 hours)
-    const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
-    const timeSinceLogin = now - loginTime;
-    if (timeSinceLogin > TWENTY_FOUR_HOURS) {
-      return; // Login too old - user not currently logged in
-    }
-    
-    // Role must match
+    // Role must match the alert's target role
     if (String(userData.role).toLowerCase() !== role) {
-      return; // Role mismatch
+      return; // Role mismatch - wrong user type
     }
     
     // STEP 4: For parent alerts, verify link to student
