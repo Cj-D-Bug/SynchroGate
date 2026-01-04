@@ -271,37 +271,43 @@ const sendPushForAlert = async (alert, role, userId) => {
     }
     
     const timeSinceTokenUpdate = now - tokenUpdateTime;
-    const FIFTEEN_MINUTES = 15 * 60 * 1000; // EXTREMELY strict: only 15 minutes
+    const TEN_MINUTES = 10 * 60 * 1000; // EXTREMELY strict: only 10 minutes
     
-    // If token is older than 15 minutes, user is likely not logged in
-    if (timeSinceTokenUpdate > FIFTEEN_MINUTES) {
-      console.log(`⏭️ Skipping push notification - user ${userId} token is too old (${Math.round(timeSinceTokenUpdate / (60 * 1000))} minutes old, max 15 minutes)`);
+    // If token is older than 10 minutes, user is likely not logged in
+    if (timeSinceTokenUpdate > TEN_MINUTES) {
+      console.log(`⏭️ Skipping push notification - user ${userId} token is too old (${Math.round(timeSinceTokenUpdate / (60 * 1000))} minutes old, max 10 minutes)`);
       return; // User hasn't logged in recently, skip notification
     }
     
-    // Additional check: Verify token was saved AFTER role was set
-    // If role exists but token timestamp is older than role creation, skip
-    const userCreatedAt = userData?.createdAt || userData?.updatedAt;
-    if (userCreatedAt) {
-      let createdAtTime;
+    // CRITICAL: Only send alerts created AFTER user logged in
+    // This prevents sending old unread alerts when user logs in
+    const alertCreatedAt = alert.createdAt || alert.timestamp || alert.id;
+    if (alertCreatedAt) {
+      let alertTime;
       try {
-        if (userCreatedAt.toMillis) {
-          createdAtTime = userCreatedAt.toMillis();
-        } else if (userCreatedAt.seconds) {
-          createdAtTime = userCreatedAt.seconds * 1000;
-        } else if (typeof userCreatedAt === 'string') {
-          createdAtTime = new Date(userCreatedAt).getTime();
-        } else if (typeof userCreatedAt === 'number') {
-          createdAtTime = userCreatedAt;
+        // Try to extract timestamp from alert ID (format: timestamp_random)
+        if (typeof alertCreatedAt === 'string' && alertCreatedAt.includes('_')) {
+          const timestampPart = alertCreatedAt.split('_')[0];
+          alertTime = parseInt(timestampPart, 10);
+          if (isNaN(alertTime)) {
+            // Try parsing as date string
+            alertTime = new Date(alertCreatedAt).getTime();
+          }
+        } else if (typeof alertCreatedAt === 'string') {
+          alertTime = new Date(alertCreatedAt).getTime();
+        } else if (typeof alertCreatedAt === 'number') {
+          alertTime = alertCreatedAt;
         }
         
-        if (createdAtTime && !isNaN(createdAtTime) && tokenUpdateTime < createdAtTime) {
-          // Token was saved before user was created - this shouldn't happen, skip
-          console.log(`⏭️ Skipping push notification - user ${userId} token timestamp is before user creation`);
-          return;
+        // If we have both alert time and login time, only send if alert was created AFTER login
+        if (alertTime && !isNaN(alertTime) && lastLoginTime && alertTime < lastLoginTime) {
+          console.log(`⏭️ Skipping push notification - alert ${alertId} was created before user ${userId} logged in (old alert)`);
+          return; // This is an old alert, don't send it
         }
       } catch (err) {
-        // Ignore errors in createdAt parsing
+        // If we can't parse alert time, be conservative and skip
+        console.log(`⏭️ Skipping push notification - cannot parse alert creation time for ${alertId}`);
+        return;
       }
     }
 
