@@ -65,7 +65,7 @@
     ],
     "extra": {
       "env": "production",
-      "apiBaseUrl": "https://[YOUR-SERVICE-NAME]-[BRANCH].up.railway.app/api",
+      "apiBaseUrl": "https://synchrogate-production.up.railway.app/api",
       "eas": {
         "projectId": "08c39b17-d128-4aec-a952-96b678fd077d"
       }
