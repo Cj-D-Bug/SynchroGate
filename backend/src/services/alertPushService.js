@@ -401,21 +401,8 @@ const initializeParentAlertsListener = () => {
           // Extract timestamp from alert ID or use createdAt
           let alertTime = null;
           try {
-            // Try to extract timestamp from alert ID (format: prefix_timestamp_random)
-            if (typeof alertId === 'string' && alertId.includes('_')) {
-              const parts = alertId.split('_');
-              // Look for numeric timestamp in the ID
-              for (const part of parts) {
-                const num = parseInt(part, 10);
-                if (!isNaN(num) && num > 1000000000000) { // Valid timestamp (milliseconds)
-                  alertTime = num;
-                  break;
-                }
-              }
-            }
-            
-            // If no timestamp in ID, try createdAt
-            if (!alertTime && item.createdAt) {
+            // Try createdAt FIRST (most reliable)
+            if (item.createdAt) {
               if (typeof item.createdAt === 'string') {
                 alertTime = new Date(item.createdAt).getTime();
               } else if (item.createdAt.toMillis) {
@@ -424,8 +411,21 @@ const initializeParentAlertsListener = () => {
                 alertTime = item.createdAt.seconds * 1000;
               }
             }
+            
+            // If no createdAt, try to extract timestamp from alert ID (format: prefix_timestamp_random or sched_studentId_type_timestamp_random)
+            if (!alertTime && typeof alertId === 'string' && alertId.includes('_')) {
+              const parts = alertId.split('_');
+              // Look for numeric timestamp in the ID (must be > 1000000000000 for milliseconds)
+              for (const part of parts) {
+                const num = parseInt(part, 10);
+                if (!isNaN(num) && num > 1000000000000) { // Valid timestamp (milliseconds)
+                  alertTime = num;
+                  break;
+                }
+              }
+            }
           } catch (e) {
-            // Ignore parsing errors
+            console.log(`⚠️ [LISTENER] Error parsing alert time for ${alertId}:`, e.message);
           }
           
           // Only send if alert was created AFTER listener started
