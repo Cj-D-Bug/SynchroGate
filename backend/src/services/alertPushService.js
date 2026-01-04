@@ -326,29 +326,55 @@ const initializeAdminAlertsListener = () => {
       previousAdminAlertIds = currentAlertIds;
       
       // Send push notifications only for NEW alerts
-      // For admin alerts, we need to send to ALL admin users
-      // First, get all admin users
-      const adminUsersSnapshot = await firestore.collection('users')
-        .where('role', '==', 'admin')
-        .get();
-      
-      const adminUserIds = [];
-      adminUsersSnapshot.forEach(doc => {
-        const userData = doc.data();
-        // Try document ID first, then UID
-        const userId = doc.id === 'Admin' ? 'Admin' : (userData?.uid || doc.id);
-        adminUserIds.push(userId);
-      });
-      
-      // If no admin users found, try the 'Admin' document
-      if (adminUserIds.length === 0) {
-        adminUserIds.push('Admin');
-      }
-      
-      // Send notification to each admin user for each new alert
-      for (const alert of unreadAlerts) {
-        for (const adminUserId of adminUserIds) {
-          await sendPushForAlert(alert, 'admin', adminUserId);
+      // For admin alerts, send to ALL logged-in admin users only
+      if (unreadAlerts.length > 0) {
+        // Get all admin users
+        const adminUsersSnapshot = await firestore.collection('users')
+          .where('role', '==', 'admin')
+          .get();
+        
+        const adminUserIds = [];
+        const now = Date.now();
+        const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+        
+        adminUsersSnapshot.forEach(doc => {
+          const userData = doc.data();
+          
+          // Only include admins who are logged in (have recent FCM token)
+          const pushTokenUpdatedAt = userData?.pushTokenUpdatedAt;
+          if (pushTokenUpdatedAt && userData?.fcmToken) {
+            const tokenUpdateTime = pushTokenUpdatedAt.toMillis ? pushTokenUpdatedAt.toMillis() : new Date(pushTokenUpdatedAt).getTime();
+            const timeSinceTokenUpdate = now - tokenUpdateTime;
+            
+            // Only include if token was updated within last 24 hours (user is logged in)
+            if (timeSinceTokenUpdate <= TWENTY_FOUR_HOURS) {
+              const userId = doc.id === 'Admin' ? 'Admin' : (userData?.uid || doc.id);
+              adminUserIds.push(userId);
+            }
+          }
+        });
+        
+        // If no logged-in admin users found, try the 'Admin' document (but still check if logged in)
+        if (adminUserIds.length === 0) {
+          const adminDoc = await firestore.collection('users').doc('Admin').get();
+          if (adminDoc.exists) {
+            const adminData = adminDoc.data();
+            const pushTokenUpdatedAt = adminData?.pushTokenUpdatedAt;
+            if (pushTokenUpdatedAt && adminData?.fcmToken) {
+              const tokenUpdateTime = pushTokenUpdatedAt.toMillis ? pushTokenUpdatedAt.toMillis() : new Date(pushTokenUpdatedAt).getTime();
+              const timeSinceTokenUpdate = now - tokenUpdateTime;
+              if (timeSinceTokenUpdate <= TWENTY_FOUR_HOURS) {
+                adminUserIds.push('Admin');
+              }
+            }
+          }
+        }
+        
+        // Send notification to each logged-in admin user for each new alert
+        for (const alert of unreadAlerts) {
+          for (const adminUserId of adminUserIds) {
+            await sendPushForAlert(alert, 'admin', adminUserId);
+          }
         }
       }
     } catch (error) {
