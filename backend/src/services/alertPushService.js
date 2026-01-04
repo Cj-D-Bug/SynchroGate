@@ -430,10 +430,27 @@ const initializeAdminAlertsListener = () => {
         adminUsersSnapshot.forEach(doc => {
           const userData = doc.data();
           
-          // Only include admins who are logged in (have recent FCM token)
+          // Check 1: Must have FCM token
+          if (!userData?.fcmToken) {
+            return; // Skip admins without token
+          }
+          
+          // Check 2: Must have a role (actually logged in)
+          const userRole = userData?.role;
+          if (!userRole || typeof userRole !== 'string' || userRole.toLowerCase() !== 'admin') {
+            return; // Skip if no role or not admin
+          }
+          
+          // Check 3: Must have UID (authenticated)
+          const userUid = userData?.uid;
+          if (!userUid || typeof userUid !== 'string' || userUid.trim().length === 0) {
+            return; // Skip if not authenticated
+          }
+          
+          // Check 4: FCM token was updated recently
           const pushTokenUpdatedAt = userData?.pushTokenUpdatedAt;
-          if (!pushTokenUpdatedAt || !userData?.fcmToken) {
-            return; // Skip admins without token or timestamp
+          if (!pushTokenUpdatedAt) {
+            return; // Skip admins without timestamp
           }
           
           // Handle different timestamp formats
