@@ -168,15 +168,13 @@ const sendMessagePushNotification = async (message, conversationId, conversation
       return;
     }
     
-    // Get sender name for notification
-    let senderName = 'Someone';
+    // Get sender first name for notification
+    let senderFirstName = 'Someone';
     try {
       const senderDoc = await firestore.collection('users').doc(senderId).get();
       if (senderDoc.exists) {
         const senderData = senderDoc.data();
-        const firstName = senderData.firstName || '';
-        const lastName = senderData.lastName || '';
-        senderName = `${firstName} ${lastName}`.trim() || 'Someone';
+        senderFirstName = String(senderData.firstName || '').trim() || 'Someone';
       }
     } catch (error) {
       console.warn('Error getting sender name:', error);
@@ -193,23 +191,23 @@ const sendMessagePushNotification = async (message, conversationId, conversation
     const messageText = String(message.text || '').trim();
     const truncatedText = messageText.length > 100 ? messageText.substring(0, 100) + '...' : messageText;
     
-    // Send push notification
+    // Send push notification - use first name only as title
     await pushService.sendPush(
       fcmToken,
-      `New message from ${senderName}`,
+      senderFirstName,
       truncatedText,
       {
         type: 'message',
         conversationId: conversationId,
         messageId: message.id || '',
         senderId: senderId,
-        senderName: senderName,
+        senderName: senderFirstName,
         text: messageText,
         createdAt: message.createdAt ? (typeof message.createdAt.toMillis === 'function' ? message.createdAt.toMillis() : String(message.createdAt)) : Date.now()
       }
     );
     
-    console.log(`✅✅✅ MESSAGE PUSH SENT to ${recipientRole} ${recipientId} from ${senderName}`);
+    console.log(`✅✅✅ MESSAGE PUSH SENT to ${recipientRole} ${recipientId} from ${senderFirstName}`);
     
   } catch (error) {
     console.error(`❌ Message push notification failed:`, error.message);

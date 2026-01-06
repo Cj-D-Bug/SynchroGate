@@ -103,6 +103,7 @@ function AppContent() {
             try {
               // Display notification using expo-notifications when app is in foreground
               // When app is closed, FCM automatically displays the notification
+              // Backend messagePushService handles all message push notifications, so we just display what we receive
               await Notifications.scheduleNotificationAsync({
                 content: {
                   title: remoteMessage?.notification?.title || remoteMessage?.data?.title || 'New Alert',
