@@ -26,8 +26,6 @@ const logRoutes = require('./routes/logRoutes');
 
 // Import alert push service (auto-sends push notifications when alerts change)
 const alertPushService = require('./services/alertPushService');
-// Import message push service (auto-sends push notifications when new messages are sent)
-const messagePushService = require('./services/messagePushService');
 
 const app = express();
 
@@ -131,7 +129,6 @@ process.on('unhandledRejection', (reason, promise) => {
 process.on('SIGTERM', () => {
   console.log('⚠️ SIGTERM received, shutting down gracefully...');
   alertPushService.cleanupAlertListeners();
-  messagePushService.cleanupConversationListeners();
   process.exit(0);
 });
 
@@ -139,7 +136,6 @@ process.on('SIGTERM', () => {
 process.on('SIGINT', () => {
   console.log('⚠️ SIGINT received, shutting down gracefully...');
   alertPushService.cleanupAlertListeners();
-  messagePushService.cleanupConversationListeners();
   process.exit(0);
 });
 
@@ -155,10 +151,6 @@ async function startServer() {
     // Initialize alert push listeners (auto-send push notifications when alerts change)
     // This works even when the app is closed because the backend is always running
     await alertPushService.initializeAllAlertListeners();
-    
-    // Initialize message push listeners (auto-send push notifications when new messages are sent)
-    // This works even when the app is closed because the backend is always running
-    messagePushService.initializeAllConversationListeners();
 
     const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Server running on port ${PORT}`);

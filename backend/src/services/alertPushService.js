@@ -11,6 +11,7 @@ let alertListeners = {
   admin: null,
   studentCollection: null,
   parentCollection: null,
+  conversations: null,
 };
 
 // Track which alerts we've already notified about (prevent duplicates)
@@ -953,6 +954,244 @@ const initializeAdminAlertsListener = () => {
 };
 
 /**
+ * Initialize listener for conversation messages
+ * Sends push notifications to recipients when new messages are sent
+ */
+const initializeConversationMessagesListener = () => {
+  if (alertListeners.conversations) {
+    alertListeners.conversations();
+  }
+  
+  let previousMessageIds = new Map(); // Key: conversationId, Value: Set of message IDs
+  let isInitialSnapshot = true;
+  const listenerStartTime = Date.now();
+  
+  const conversationsCollection = firestore.collection('conversations');
+  
+  // Helper function to set up listener for a conversation's messages
+  const setupConversationListener = (conversationId) => {
+    if (previousMessageIds.has(conversationId)) {
+      return; // Already listening to this conversation
+    }
+    
+    previousMessageIds.set(conversationId, new Set());
+    
+    // Listen to messages subcollection
+    const messagesRef = firestore.collection('conversations').doc(conversationId).collection('messages');
+          
+    messagesRef.onSnapshot(async (messagesSnapshot) => {
+            // Find new messages
+            const newMessages = [];
+            const currentMessageIds = previousMessageIds.get(conversationId) || new Set();
+            
+            messagesSnapshot.docChanges().forEach(change => {
+              if (change.type === 'added') {
+                const messageId = change.doc.id;
+                if (!currentMessageIds.has(messageId)) {
+                  const messageData = change.doc.data();
+                  
+                  // Extract timestamp
+                  let messageTime = null;
+                  try {
+                    if (messageData.createdAt) {
+                      if (typeof messageData.createdAt === 'string') {
+                        messageTime = new Date(messageData.createdAt).getTime();
+                      } else if (messageData.createdAt.toMillis) {
+                        messageTime = messageData.createdAt.toMillis();
+                      } else if (messageData.createdAt.seconds) {
+                        messageTime = messageData.createdAt.seconds * 1000;
+                      }
+                    }
+                  } catch (e) {
+                    // Ignore
+                  }
+                  
+                  // Only process messages created after listener started
+                  if (messageTime && messageTime > listenerStartTime) {
+                    newMessages.push({
+                      id: messageId,
+                      ...messageData,
+                      conversationId
+                    });
+                    currentMessageIds.add(messageId);
+                  }
+                }
+              }
+            });
+            
+            previousMessageIds.set(conversationId, currentMessageIds);
+            
+            // Process each new message
+            for (const message of newMessages) {
+              const senderId = message.senderId;
+              if (!senderId) continue;
+              
+              // Determine recipient based on conversation data
+              let recipientId = null;
+              let recipientRole = null;
+              let senderName = null;
+              
+              // Get conversation data to determine recipient
+              try {
+                const convDoc = await firestore.collection('conversations').doc(conversationId).get();
+                if (!convDoc.exists) continue;
+                
+                const convData = convDoc.data();
+                
+                // Determine if this is a student-to-parent or student-to-student conversation
+                if (convData.parentId && convData.studentId) {
+                  // Student-to-parent conversation
+                  if (senderId === convData.studentId || String(senderId) === String(convData.studentIdNumber)) {
+                    // Student is sender, parent is recipient
+                    recipientId = convData.parentIdNumber || convData.parentId;
+                    recipientRole = 'parent';
+                    
+                    // Get sender (student) name
+                    try {
+                      const senderDoc = await firestore.collection('users').doc(String(convData.studentIdNumber || convData.studentId)).get();
+                      if (senderDoc.exists) {
+                        const senderData = senderDoc.data();
+                        senderName = `${senderData.firstName || ''} ${senderData.lastName || ''}`.trim() || 'Student';
+                      }
+                    } catch (e) {
+                      senderName = 'Student';
+                    }
+                  } else {
+                    // Parent is sender, student is recipient
+                    recipientId = convData.studentIdNumber || convData.studentId;
+                    recipientRole = 'student';
+                    
+                    // Get sender (parent) name
+                    try {
+                      const senderDoc = await firestore.collection('users').doc(String(convData.parentIdNumber || convData.parentId)).get();
+                      if (senderDoc.exists) {
+                        const senderData = senderDoc.data();
+                        senderName = `${senderData.firstName || ''} ${senderData.lastName || ''}`.trim() || 'Parent';
+                      }
+                    } catch (e) {
+                      senderName = 'Parent';
+                    }
+                  }
+                } else if (convData.studentId1 && convData.studentId2) {
+                  // Student-to-student conversation
+                  const isStudent1Sender = String(senderId) === String(convData.studentId1) || String(senderId) === String(convData.studentIdNumber1);
+                  
+                  if (isStudent1Sender) {
+                    recipientId = convData.studentIdNumber2 || convData.studentId2;
+                    recipientRole = 'student';
+                  } else {
+                    recipientId = convData.studentIdNumber1 || convData.studentId1;
+                    recipientRole = 'student';
+                  }
+                  
+                  // Get sender name
+                  try {
+                    const senderDoc = await firestore.collection('users').doc(String(isStudent1Sender ? (convData.studentIdNumber1 || convData.studentId1) : (convData.studentIdNumber2 || convData.studentId2))).get();
+                    if (senderDoc.exists) {
+                      const senderData = senderDoc.data();
+                      senderName = `${senderData.firstName || ''} ${senderData.lastName || ''}`.trim() || 'Student';
+                    }
+                  } catch (e) {
+                    senderName = 'Student';
+                  }
+                }
+                
+                if (!recipientId || !recipientRole) {
+                  console.log(`⏭️ [MESSAGE LISTENER] SKIP - could not determine recipient for conversation ${conversationId}`);
+                  continue;
+                }
+                
+                // Get recipient user document
+                const recipientDoc = await firestore.collection('users').doc(String(recipientId)).get();
+                if (!recipientDoc.exists) {
+                  console.log(`⏭️ [MESSAGE LISTENER] SKIP - recipient document ${recipientId} does not exist`);
+                  continue;
+                }
+                
+                const recipientData = recipientDoc.data();
+                
+                // Verify recipient is logged in
+                if (!isUserLoggedIn(recipientData)) {
+                  console.log(`⏭️ [MESSAGE LISTENER] SKIP - recipient ${recipientId} is NOT LOGGED IN or INACTIVE`);
+                  continue;
+                }
+                
+                // Verify role matches
+                if (String(recipientData.role).toLowerCase() !== recipientRole.toLowerCase()) {
+                  console.log(`⏭️ [MESSAGE LISTENER] SKIP - recipient ${recipientId} role (${recipientData.role}) doesn't match expected role (${recipientRole})`);
+                  continue;
+                }
+                
+                if (!recipientData.fcmToken) {
+                  console.log(`⏭️ [MESSAGE LISTENER] SKIP - recipient ${recipientId} has no FCM token`);
+                  continue;
+                }
+                
+                // Send push notification to recipient
+                const deduplicationKey = `message_${message.id}_${recipientId}`;
+                if (notifiedAlerts.has(deduplicationKey)) {
+                  console.log(`⏭️ [MESSAGE LISTENER] SKIP - already notified recipient ${recipientId} about message ${message.id}`);
+                  continue;
+                }
+                
+                const title = `New message from ${senderName || 'Someone'}`;
+                const body = String(message.text || '').substring(0, 100); // Limit body length
+                
+                await pushService.sendPush(
+                  recipientData.fcmToken,
+                  title,
+                  body,
+                  {
+                    type: 'message',
+                    conversationId: conversationId,
+                    messageId: message.id,
+                    senderId: senderId,
+                    recipientId: recipientId,
+                    recipientRole: recipientRole,
+                    text: String(message.text || ''),
+                    userUid: recipientData.uid,
+                    userEmail: recipientData.email,
+                  }
+                );
+                
+                notifiedAlerts.set(deduplicationKey, Date.now());
+                console.log(`✅✅✅ MESSAGE PUSH SENT to ${recipientRole} ${recipientId} (${recipientData.uid}) - ${title}`);
+              } catch (error) {
+                console.error(`❌ Error processing message notification for conversation ${conversationId}:`, error.message);
+              }
+            }
+          }, (error) => {
+            console.error(`❌ Error in messages listener for conversation ${conversationId}:`, error);
+          });
+  };
+  
+  alertListeners.conversations = conversationsCollection.onSnapshot(async (snapshot) => {
+    if (isInitialSnapshot) {
+      // Initialize with existing conversations and set up listeners for each
+      snapshot.docs.forEach(convDoc => {
+        const conversationId = convDoc.id;
+        setupConversationListener(conversationId);
+      });
+      isInitialSnapshot = false;
+      console.log(`✅ Conversation messages listener initialized at ${new Date(listenerStartTime).toISOString()}`);
+      return;
+    }
+    
+    // For each conversation that changed, set up listener if not already listening
+    for (const change of snapshot.docChanges()) {
+      if (change.type === 'added' || change.type === 'modified') {
+        const conversationId = change.doc.id;
+        setupConversationListener(conversationId);
+      }
+    }
+  }, (error) => {
+    console.error('Conversation messages listener error:', error);
+  });
+  
+  console.log('✅ Conversation messages listener initialized');
+};
+
+/**
  * Initialize all alert listeners
  */
 const initializeAllAlertListeners = async () => {
@@ -960,6 +1199,7 @@ const initializeAllAlertListeners = async () => {
     initializeAdminAlertsListener();
     initializeStudentAlertsListener();
     initializeParentAlertsListener();
+    initializeConversationMessagesListener();
     console.log('✅ All alert listeners initialized');
   } catch (error) {
     console.error('Error initializing alert listeners:', error);
@@ -994,6 +1234,10 @@ const cleanupAlertListeners = () => {
   if (alertListeners.admin) {
     alertListeners.admin();
     alertListeners.admin = null;
+  }
+  if (alertListeners.conversations) {
+    alertListeners.conversations();
+    alertListeners.conversations = null;
   }
   notifiedAlerts.clear();
 };
