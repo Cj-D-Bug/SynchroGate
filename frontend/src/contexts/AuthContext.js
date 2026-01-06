@@ -11,8 +11,8 @@ import {
   sendPasswordResetEmail,
 } from "firebase/auth";
 import { doc, setDoc, getDoc, updateDoc, collection, query, where, getDocs, deleteDoc, onSnapshot } from "firebase/firestore";
-import { initializeGlobalPushNotifications, cleanupGlobalPushNotifications } from "../services/globalPushNotificationService";
-import { initializeGlobalParentPushNotifications, cleanupGlobalParentPushNotifications } from "../services/globalParentPushNotificationService";
+// Removed: globalPushNotificationService and globalParentPushNotificationService
+// Backend now handles all push notifications automatically via alertPushService
 import { generateAndSavePushToken } from "../utils/pushTokenGenerator";
 
 export const AuthContext = createContext();

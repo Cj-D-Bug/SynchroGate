@@ -49,7 +49,7 @@ import usePushNotifications from "./src/hooks/usePushNotifications";
 import { triggerOfflineSync } from "./src/offline/syncWorker";
 import { configureFullScreen } from "./src/utils/fullScreenUtils";
 import FullScreenWrapper from "./src/components/FullScreenWrapper";
-import { initializeGlobalPushNotifications, cleanupGlobalPushNotifications } from "./src/services/globalPushNotificationService";
+// Removed: globalPushNotificationService - backend now handles all push notifications
 
 // React Native Firebase is now initialized in firebaseNativeInit.js (loaded above)
 // No need to initialize again here

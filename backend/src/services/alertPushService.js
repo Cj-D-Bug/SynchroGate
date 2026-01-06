@@ -2,6 +2,7 @@
 // STRICT VERSION - Only send to the exact logged-in user who owns the alert document
 const { firestore, admin } = require('../config/firebase');
 const pushService = require('./pushService');
+const { getLinkFcmTokens, verifyUserIdentity } = require('../utils/linkFcmTokenHelper');
 
 let alertListeners = {
   student: null,
@@ -331,23 +332,25 @@ const sendPushForAlert = async (alert, role, userId) => {
     const title = alert.title || 'New Alert';
     const body = alert.message || alert.body || 'You have a new alert';
     
-    // CRITICAL: For specific user notifications (not attendance scans), verify user identity
-    // Get complete user info to ensure we're sending to the right person
-    const userInfo = {
-      uid: userData.uid,
-      firstName: userData.firstName || '',
-      lastName: userData.lastName || '',
-      email: userData.email || '',
-      parentId: userData.parentId || userData.parentIdNumber || null,
-      studentId: userData.studentId || userData.studentIdNumber || null,
-      fcmToken: userData.fcmToken
+    // CRITICAL: Use verifyUserIdentity to get complete user info and ensure we're sending to the right person
+    // This verifies: firstName, lastName, uid, studentId/parentId, email, fcmToken, login recency
+    const expectedData = {
+      uid: alert.uid || null,
+      email: alert.email || null,
+      studentId: role === 'student' ? (alert.studentId || alert.student_id || null) : null,
+      parentId: role === 'parent' ? (alert.parentId || alert.parent_id || null) : null
     };
     
-    console.log(`✅ ALL VALIDATIONS PASSED - Sending push to ${role} ${userId}`);
-    console.log(`   User Info: uid=${userInfo.uid}, firstName=${userInfo.firstName}, lastName=${userInfo.lastName}, email=${userInfo.email}`);
-    console.log(`   HasToken: ${!!userInfo.fcmToken}`);
+    const verification = await verifyUserIdentity(userId, role, expectedData);
     
-    // Verify alert belongs to this specific user before sending
+    if (!verification.valid) {
+      console.log(`⏭️ [${role}] SKIP - User identity verification failed: ${verification.error}`);
+      return;
+    }
+    
+    const userInfo = verification.userData;
+    
+    // Additional verification: Ensure alert belongs to this specific user
     if (role === 'student') {
       // For students, verify studentId matches
       const alertStudentId = alert.studentId || alert.student_id;
@@ -372,6 +375,10 @@ const sendPushForAlert = async (alert, role, userId) => {
       }
     }
     
+    console.log(`✅ ALL VALIDATIONS PASSED - Sending push to ${role} ${userId}`);
+    console.log(`   User Info: uid=${userInfo.uid}, firstName=${userInfo.firstName}, lastName=${userInfo.lastName}, email=${userInfo.email}`);
+    console.log(`   HasToken: ${!!userInfo.fcmToken}`);
+    
     if (!userInfo.fcmToken) {
       console.log(`⏭️ [${role}] SKIP - user ${userId} has no FCM token`);
       return;
@@ -388,12 +395,17 @@ const sendPushForAlert = async (alert, role, userId) => {
         studentId: alert.studentId || '',
         parentId: alert.parentId || '',
         status: alert.status || 'unread',
+        // Include verified user identity in data
+        userUid: userInfo.uid,
+        userEmail: userInfo.email,
+        userFirstName: userInfo.firstName,
+        userLastName: userInfo.lastName,
         ...alert
       }
     );
     
     // Mark as notified
-    notifiedAlerts.set(deduplicationKey, now);
+    notifiedAlerts.set(deduplicationKey, Date.now());
     console.log(`✅✅✅ PUSH SENT to ${role} ${userId} (${userData.uid}) - ${title}`);
     
   } catch (error) {
