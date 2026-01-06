@@ -171,7 +171,11 @@ const sendPushForAlert = async (alert, role, userId) => {
       const hasParentId = !!(alert.parentId || alert.parent_id);
       const hasStudentId = !!(alert.studentId || alert.student_id);
       
-      if (hasParentId || hasStudentId) {
+      // SPECIAL CASE: qr_request alerts can have studentId (they're FROM students TO admins)
+      const isQrRequest = alertType.toLowerCase() === 'qr_request';
+      
+      // For non-qr_request alerts, reject if they have parentId or studentId
+      if (!isQrRequest && (hasParentId || hasStudentId)) {
         console.log(`⏭️ [${role}] SKIP - admin alert has parentId (${hasParentId}) or studentId (${hasStudentId}) - this is a parent/student alert`);
         return;
       }
@@ -183,9 +187,14 @@ const sendPushForAlert = async (alert, role, userId) => {
       ];
       const isParentStudentType = parentStudentAlertTypes.some(t => alertType.toLowerCase().includes(t.toLowerCase()));
       
-      if (isParentStudentType) {
+      // Allow qr_request even if it's in the list (it's an exception)
+      if (isParentStudentType && !isQrRequest) {
         console.log(`⏭️ [${role}] SKIP - alert type "${alertType}" is a parent/student alert type, not an admin alert`);
         return;
+      }
+      
+      if (isQrRequest) {
+        console.log(`✅ [${role}] QR request alert verified - will send to admin users`);
       }
     }
     
@@ -616,7 +625,7 @@ const initializeAdminAlertsListener = () => {
     const items = Array.isArray(snap.data()?.items) ? snap.data().items : [];
     const currentAlertIds = new Set();
     
-    // Find new unread alerts - CRITICAL: Filter out parent/student alerts
+    // Find new unread alerts - CRITICAL: Filter out parent/student alerts BUT allow qr_request
     const newAlerts = items.filter(item => {
       const alertId = item.id || item.alertId;
       if (item.status !== 'unread' || !alertId || previousAdminAlertIds.has(alertId)) {
@@ -628,7 +637,12 @@ const initializeAdminAlertsListener = () => {
       const hasParentId = !!(item.parentId || item.parent_id);
       const hasStudentId = !!(item.studentId || item.student_id);
       
-      if (hasParentId || hasStudentId) {
+      // SPECIAL CASE: qr_request alerts can have studentId (they're FROM students TO admins)
+      // This is the only exception - qr_request is an admin alert even if it has studentId
+      const isQrRequest = alertType.toLowerCase() === 'qr_request';
+      
+      // For non-qr_request alerts, reject if they have parentId or studentId
+      if (!isQrRequest && (hasParentId || hasStudentId)) {
         console.log(`⏭️ [ADMIN LISTENER] SKIP - alert ${alertId} has parentId (${hasParentId}) or studentId (${hasStudentId})`);
         return false;
       }
@@ -640,7 +654,8 @@ const initializeAdminAlertsListener = () => {
       ];
       const isParentStudentType = parentStudentAlertTypes.some(t => alertType.toLowerCase().includes(t.toLowerCase()));
       
-      if (isParentStudentType) {
+      // Allow qr_request even if it's in the list (it's an exception)
+      if (isParentStudentType && !isQrRequest) {
         console.log(`⏭️ [ADMIN LISTENER] SKIP - alert ${alertId} type "${alertType}" is a parent/student alert type`);
         return false;
       }
@@ -652,18 +667,27 @@ const initializeAdminAlertsListener = () => {
     previousAdminAlertIds = currentAlertIds;
     
     if (newAlerts.length > 0) {
-      // Get all logged-in admin users
+      // CRITICAL: Get all logged-in admin users with their full data (email, role, FCM token)
       const adminUsersSnapshot = await firestore.collection('users')
         .where('role', '==', 'admin')
         .get();
       
-      const adminUserIds = [];
+      const adminUsers = []; // Store full admin user data
       
       adminUsersSnapshot.forEach(doc => {
         const userData = doc.data();
         if (isUserLoggedIn(userData) && userData.role === 'admin') {
           const adminUserId = doc.id === 'Admin' ? 'Admin' : (userData.uid || doc.id);
-          adminUserIds.push(adminUserId);
+          adminUsers.push({
+            userId: adminUserId,
+            email: userData.email || '',
+            role: userData.role || 'admin',
+            fcmToken: userData.fcmToken || null,
+            firstName: userData.firstName || '',
+            lastName: userData.lastName || '',
+            uid: userData.uid || adminUserId
+          });
+          console.log(`✅ [ADMIN LISTENER] Found logged-in admin: ${adminUserId} (${userData.email || 'no email'})`);
         }
       });
       
@@ -672,38 +696,62 @@ const initializeAdminAlertsListener = () => {
       if (adminDoc.exists) {
         const adminData = adminDoc.data();
         if (isUserLoggedIn(adminData) && adminData.role === 'admin') {
-          if (!adminUserIds.includes('Admin')) {
-            adminUserIds.push('Admin');
+          const adminExists = adminUsers.some(u => u.userId === 'Admin');
+          if (!adminExists) {
+            adminUsers.push({
+              userId: 'Admin',
+              email: adminData.email || '',
+              role: adminData.role || 'admin',
+              fcmToken: adminData.fcmToken || null,
+              firstName: adminData.firstName || '',
+              lastName: adminData.lastName || '',
+              uid: adminData.uid || 'Admin'
+            });
+            console.log(`✅ [ADMIN LISTENER] Found logged-in Admin document (${adminData.email || 'no email'})`);
           }
         }
       }
       
+      if (adminUsers.length === 0) {
+        console.log(`⏭️ [ADMIN LISTENER] No logged-in admin users found - skipping ${newAlerts.length} alert(s)`);
+        return;
+      }
+      
+      console.log(`📨 [ADMIN LISTENER] Sending ${newAlerts.length} alert(s) to ${adminUsers.length} logged-in admin user(s)`);
+      
       // Send to each admin individually
       for (const alert of newAlerts) {
-        // Double-check alert is admin-only
         const alertType = alert.type || alert.alertType || '';
-        const hasParentId = !!(alert.parentId || alert.parent_id);
-        const hasStudentId = !!(alert.studentId || alert.student_id);
+        const isQrRequest = alertType.toLowerCase() === 'qr_request';
         
-        if (hasParentId || hasStudentId) {
-          console.log(`⏭️ [ADMIN LISTENER] CRITICAL: Skipping alert ${alert.id || alert.alertId} - has parentId/studentId`);
-          continue;
+        // For qr_request, allow studentId (it's FROM student TO admin)
+        // For other alerts, verify they don't have parentId/studentId
+        if (!isQrRequest) {
+          const hasParentId = !!(alert.parentId || alert.parent_id);
+          const hasStudentId = !!(alert.studentId || alert.student_id);
+          
+          if (hasParentId || hasStudentId) {
+            console.log(`⏭️ [ADMIN LISTENER] CRITICAL: Skipping alert ${alert.id || alert.alertId} - has parentId/studentId (not qr_request)`);
+            continue;
+          }
+          
+          const parentStudentAlertTypes = [
+            'schedule_permission_request', 'schedule_permission_response',
+            'attendance_scan', 'link_request', 'link_response',
+            'schedule_added', 'schedule_updated', 'schedule_deleted', 'schedule_current'
+          ];
+          const isParentStudentType = parentStudentAlertTypes.some(t => alertType.toLowerCase().includes(t.toLowerCase()));
+          
+          if (isParentStudentType) {
+            console.log(`⏭️ [ADMIN LISTENER] CRITICAL: Skipping alert ${alert.id || alert.alertId} - type "${alertType}" is parent/student type`);
+            continue;
+          }
         }
         
-        const parentStudentAlertTypes = [
-          'schedule_permission_request', 'schedule_permission_response',
-          'attendance_scan', 'link_request', 'link_response',
-          'schedule_added', 'schedule_updated', 'schedule_deleted', 'schedule_current'
-        ];
-        const isParentStudentType = parentStudentAlertTypes.some(t => alertType.toLowerCase().includes(t.toLowerCase()));
-        
-        if (isParentStudentType) {
-          console.log(`⏭️ [ADMIN LISTENER] CRITICAL: Skipping alert ${alert.id || alert.alertId} - type "${alertType}" is parent/student type`);
-          continue;
-        }
-        
-        for (const adminUserId of adminUserIds) {
-          await sendPushForAlert(alert, 'admin', adminUserId);
+        // Send to each logged-in admin user
+        for (const adminUser of adminUsers) {
+          console.log(`📤 [ADMIN LISTENER] Sending ${alertType} alert to admin ${adminUser.userId} (${adminUser.email})`);
+          await sendPushForAlert(alert, 'admin', adminUser.userId);
         }
       }
     }
