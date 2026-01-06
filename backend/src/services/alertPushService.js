@@ -514,8 +514,57 @@ const initializeStudentAlertsListener = () => {
             console.error(`❌ Error querying parent_student_links by studentIdNumber:`, e.message);
           }
           
+          // CRITICAL: First, send push notification to the STUDENT themselves
+          // This should happen regardless of whether there are linked parents
+          // Check if student is logged in and has FCM token
+          if (isUserLoggedIn(studentDataCheck)) {
+            const studentFcmToken = studentDataCheck.fcmToken;
+            if (studentFcmToken) {
+              try {
+                const alertId = alert.id || alert.alertId || `${studentId}_${Date.now()}`;
+                const deduplicationKey = `${alertId}_${studentId}`;
+                
+                // Check if we've already notified about this alert
+                if (!notifiedAlerts.has(deduplicationKey)) {
+                  const title = alert.title || 'New Alert';
+                  const body = alert.message || alert.body || 'You have a new alert';
+                  
+                  await pushService.sendPush(
+                    studentFcmToken,
+                    title,
+                    body,
+                    {
+                      type: 'alert',
+                      alertId: alertId,
+                      alertType: alert.type || alert.alertType || 'student_alert',
+                      studentId: studentId,
+                      status: alert.status || 'unread',
+                      userUid: studentDataCheck.uid,
+                      userEmail: studentDataCheck.email,
+                      userFirstName: studentDataCheck.firstName,
+                      userLastName: studentDataCheck.lastName,
+                      ...alert
+                    }
+                  );
+                  
+                  notifiedAlerts.set(deduplicationKey, Date.now());
+                  console.log(`✅✅✅ PUSH SENT to STUDENT ${studentId} (${studentDataCheck.uid}) - ${title}`);
+                } else {
+                  console.log(`⏭️ [LISTENER] SKIP - already notified student ${studentId} about alert ${alertId}`);
+                }
+              } catch (pushError) {
+                console.error(`❌ Push failed for student ${studentId}:`, pushError.message);
+              }
+            } else {
+              console.log(`⏭️ [LISTENER] SKIP - student ${studentId} has no FCM token`);
+            }
+          } else {
+            console.log(`⏭️ [LISTENER] SKIP - student ${studentId} is NOT LOGGED IN or INACTIVE`);
+          }
+          
+          // Now send push notifications to linked parents (if any)
           if (linkedParents.length === 0) {
-            console.log(`⏭️ [LISTENER] SKIP - no active parent links found for student ${studentId}`);
+            console.log(`⏭️ [LISTENER] No active parent links found for student ${studentId} - skipping parent notifications`);
             continue;
           }
           

@@ -112,7 +112,9 @@ const Alerts = () => {
         const data = studentDoc.data();
         const items = Array.isArray(data.items) ? data.items : [];
 
-        const enriched = await Promise.all(items.map(async (item) => {
+        const enriched = await Promise.all(items
+          .filter(item => item.type !== 'message' && item.type !== 'chat_message') // Filter out message notifications
+          .map(async (item) => {
           let createdAtIso = item.createdAt || null;
           
           // Handle attendance_scan notifications with proper timestamp
@@ -234,7 +236,9 @@ const Alerts = () => {
           const data = snap.exists() ? (snap.data() || {}) : {};
           const items = Array.isArray(data.items) ? data.items : [];
           
-          const mapped = await Promise.all(items.map(async item => {
+          const mapped = await Promise.all(items
+            .filter(item => item.type !== 'message' && item.type !== 'chat_message') // Filter out message notifications
+            .map(async item => {
             let createdAtIso = item.createdAt;
             
             if (item.type === 'attendance_scan') {
@@ -412,6 +416,11 @@ const Alerts = () => {
         const data = snap.data();
         const items = Array.isArray(data.items) ? data.items : [];
         const keep = items.filter(it => {
+          // Filter out message/chat_message notifications
+          if (it.type === 'message' || it.type === 'chat_message') {
+            return false;
+          }
+          
           // Keep link_request notifications (parent link requests) that haven't been responded to
           if (it.type === 'link_request') return true;
           
@@ -910,6 +919,10 @@ const Alerts = () => {
               <View style={styles.separator} />
               <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
               {alerts.filter(alert => {
+                // Filter out message/chat_message notifications
+                if (alert.alertType === 'message' || alert.alertType === 'chat_message') {
+                  return false;
+                }
                 if (filter === 'all') return true;
                 if (filter === 'unread') return alert.status === 'unread';
                 if (filter === 'read') return alert.status === 'read';
