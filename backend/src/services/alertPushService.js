@@ -89,6 +89,38 @@ const sendPushForAlert = async (alert, role, userId) => {
         return;
       }
       console.log(`✅ [${role}] Admin user validated: ${userId}`);
+      
+      // CRITICAL: Verify alert is actually an admin alert
+      // Admin alerts should NOT have parentId or studentId (those belong to parent/student alerts)
+      const alertType = alert.type || alert.alertType || '';
+      const hasParentId = !!(alert.parentId || alert.parent_id);
+      const hasStudentId = !!(alert.studentId || alert.student_id);
+      
+      // Admin alerts should be admin-specific (like qr_request, system alerts, etc.)
+      // NOT parent/student alerts (like schedule_permission_request, attendance_scan, etc.)
+      const adminOnlyAlertTypes = ['qr_request', 'system_alert', 'admin_notification'];
+      const isAdminOnlyType = adminOnlyAlertTypes.some(t => alertType.toLowerCase().includes(t.toLowerCase()));
+      
+      // If alert has parentId or studentId, it's NOT an admin alert - skip it
+      if (hasParentId || hasStudentId) {
+        console.log(`⏭️ [${role}] SKIP - admin alert has parentId (${hasParentId}) or studentId (${hasStudentId}) - this is a parent/student alert, not an admin alert`);
+        return;
+      }
+      
+      // If alert type is clearly a parent/student alert type, skip it
+      const parentStudentAlertTypes = [
+        'schedule_permission_request', 'schedule_permission_response',
+        'attendance_scan', 'link_request', 'link_response',
+        'schedule_added', 'schedule_updated', 'schedule_deleted', 'schedule_current'
+      ];
+      const isParentStudentType = parentStudentAlertTypes.some(t => alertType.toLowerCase().includes(t.toLowerCase()));
+      
+      if (isParentStudentType && !isAdminOnlyType) {
+        console.log(`⏭️ [${role}] SKIP - alert type "${alertType}" is a parent/student alert type, not an admin alert`);
+        return;
+      }
+      
+      console.log(`✅ [${role}] Alert is verified as admin alert (type: ${alertType})`);
     }
     
     // CRITICAL STEP 3: User MUST be logged in
@@ -806,14 +838,39 @@ const initializeAdminAlertsListener = () => {
     const items = Array.isArray(snap.data()?.items) ? snap.data().items : [];
     const currentAlertIds = new Set();
     
-    // Find new unread alerts
+    // Find new unread alerts - CRITICAL: Filter out parent/student alerts that shouldn't be here
     const newAlerts = items.filter(item => {
       const alertId = item.id || item.alertId;
-      if (item.status === 'unread' && alertId && !previousAdminAlertIds.has(alertId)) {
-        currentAlertIds.add(alertId);
-        return true;
+      if (item.status !== 'unread' || !alertId || previousAdminAlertIds.has(alertId)) {
+        return false;
       }
-      return false;
+      
+      // CRITICAL: Verify this is actually an admin alert, not a parent/student alert
+      const alertType = item.type || item.alertType || '';
+      const hasParentId = !!(item.parentId || item.parent_id);
+      const hasStudentId = !!(item.studentId || item.student_id);
+      
+      // If alert has parentId or studentId, it's NOT an admin alert - skip it
+      if (hasParentId || hasStudentId) {
+        console.log(`⏭️ [ADMIN LISTENER] Skipping alert ${alertId} - has parentId (${hasParentId}) or studentId (${hasStudentId}) - this is a parent/student alert, not an admin alert`);
+        return false;
+      }
+      
+      // If alert type is clearly a parent/student alert type, skip it
+      const parentStudentAlertTypes = [
+        'schedule_permission_request', 'schedule_permission_response',
+        'attendance_scan', 'link_request', 'link_response',
+        'schedule_added', 'schedule_updated', 'schedule_deleted', 'schedule_current'
+      ];
+      const isParentStudentType = parentStudentAlertTypes.some(t => alertType.toLowerCase().includes(t.toLowerCase()));
+      
+      if (isParentStudentType) {
+        console.log(`⏭️ [ADMIN LISTENER] Skipping alert ${alertId} - type "${alertType}" is a parent/student alert type, not an admin alert`);
+        return false;
+      }
+      
+      currentAlertIds.add(alertId);
+      return true;
     });
     
     previousAdminAlertIds = currentAlertIds;
@@ -833,6 +890,37 @@ const initializeAdminAlertsListener = () => {
             userData?.uid && 
             userData?.fcmToken &&
             (userData?.lastLoginAt || userData?.pushTokenUpdatedAt)) {
+          
+          // CRITICAL: Check login recency (within 30 days)
+          const lastLoginAt = userData?.lastLoginAt || userData?.pushTokenUpdatedAt;
+          let loginTimestampMs = null;
+          try {
+            if (typeof lastLoginAt === 'string') {
+              loginTimestampMs = new Date(lastLoginAt).getTime();
+            } else if (lastLoginAt?.toMillis) {
+              loginTimestampMs = lastLoginAt.toMillis();
+            } else if (lastLoginAt?.seconds) {
+              loginTimestampMs = lastLoginAt.seconds * 1000;
+            } else if (typeof lastLoginAt === 'number') {
+              loginTimestampMs = lastLoginAt > 1000000000000 ? lastLoginAt : lastLoginAt * 1000;
+            }
+          } catch (e) {
+            // Skip this admin if we can't parse timestamp
+            return;
+          }
+          
+          if (!loginTimestampMs || isNaN(loginTimestampMs)) {
+            return; // Skip this admin
+          }
+          
+          const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+          const timeSinceLogin = Date.now() - loginTimestampMs;
+          
+          if (timeSinceLogin > THIRTY_DAYS_MS) {
+            console.log(`⏭️ [ADMIN LISTENER] Skipping admin ${doc.id} - last logged in ${Math.floor(timeSinceLogin / (24 * 60 * 60 * 1000))} days ago (more than 30 days)`);
+            return; // Skip inactive admins
+          }
+          
           // Use document ID if it's 'Admin', otherwise use uid
           const adminUserId = doc.id === 'Admin' ? 'Admin' : (userData.uid || doc.id);
           adminUserIds.push(adminUserId);
@@ -847,15 +935,43 @@ const initializeAdminAlertsListener = () => {
             adminData?.uid && 
             adminData?.fcmToken &&
             (adminData?.lastLoginAt || adminData?.pushTokenUpdatedAt)) {
-          if (!adminUserIds.includes('Admin')) {
-            adminUserIds.push('Admin');
+          
+          // Check login recency
+          const lastLoginAt = adminData?.lastLoginAt || adminData?.pushTokenUpdatedAt;
+          let loginTimestampMs = null;
+          try {
+            if (typeof lastLoginAt === 'string') {
+              loginTimestampMs = new Date(lastLoginAt).getTime();
+            } else if (lastLoginAt?.toMillis) {
+              loginTimestampMs = lastLoginAt.toMillis();
+            } else if (lastLoginAt?.seconds) {
+              loginTimestampMs = lastLoginAt.seconds * 1000;
+            } else if (typeof lastLoginAt === 'number') {
+              loginTimestampMs = lastLoginAt > 1000000000000 ? lastLoginAt : lastLoginAt * 1000;
+            }
+          } catch (e) {
+            // Skip if can't parse
+          }
+          
+          if (loginTimestampMs && !isNaN(loginTimestampMs)) {
+            const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+            const timeSinceLogin = Date.now() - loginTimestampMs;
+            
+            if (timeSinceLogin <= THIRTY_DAYS_MS) {
+              if (!adminUserIds.includes('Admin')) {
+                adminUserIds.push('Admin');
+              }
+            } else {
+              console.log(`⏭️ [ADMIN LISTENER] Skipping Admin document - last logged in ${Math.floor(timeSinceLogin / (24 * 60 * 60 * 1000))} days ago (more than 30 days)`);
+            }
           }
         }
       }
       
-      // Send to all logged-in admins
+      // Send to all logged-in admins - sendPushForAlert will do additional validation
       for (const alert of newAlerts) {
         for (const adminUserId of adminUserIds) {
+          // sendPushForAlert will verify the alert is actually an admin alert
           await sendPushForAlert(alert, 'admin', adminUserId);
         }
       }
