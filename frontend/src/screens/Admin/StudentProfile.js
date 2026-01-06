@@ -13,7 +13,7 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { useRoute, useNavigation } from '@react-navigation/native';
-import { doc, updateDoc, getDoc, query, collection, where, getDocs, onSnapshot, deleteDoc, setDoc } from 'firebase/firestore';
+import { doc, updateDoc, getDoc, query, collection, where, getDocs, onSnapshot, deleteDoc, setDoc, arrayUnion } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
 import { deleteAllUserConversations } from '../../utils/conversationUtils';
 import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
@@ -51,6 +51,8 @@ const StudentProfile = () => {
   const [networkErrorTitle, setNetworkErrorTitle] = useState('');
   const [networkErrorMessage, setNetworkErrorMessage] = useState('');
   const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [verifyConfirmVisible, setVerifyConfirmVisible] = useState(false);
+  const [verifyingAccount, setVerifyingAccount] = useState(false);
   const [editedData, setEditedData] = useState({
     firstName: student?.firstName || '',
     middleName: student?.middleName || '',
@@ -232,6 +234,8 @@ const StudentProfile = () => {
   };
 
   const fullName = `${currentStudent?.lastName || ""}, ${currentStudent?.firstName || ""} ${currentStudent?.middleName || ""}`.trim();
+  // Unverified student: verificationStatus === 'pending'. Missing field => treat as verified for older data.
+  const isPendingVerification = String(currentStudent?.verificationStatus || '').toLowerCase() === 'pending';
 
   // Dropdown options
   const COURSES = ['BSAIS', 'BSBA', 'BSCRIM', 'BSHM', 'BSIT', 'BSTM', 'BTLED'];
@@ -551,6 +555,125 @@ const StudentProfile = () => {
           setDeleteFeedbackVisible(false);
         }, 3000);
       }
+    }
+  };
+
+  const verifyStudentAccount = async () => {
+    const docId = currentStudent?.id || currentStudent?.uid;
+    if (!docId) {
+      console.log('❌ Cannot verify student: missing id/uid on currentStudent', currentStudent);
+      setFeedbackTitle('Error');
+      setFeedbackMessage('Cannot verify this student: missing student ID.');
+      setFeedbackTextColor('#DC2626');
+      setFeedbackVisible(true);
+      setTimeout(() => setFeedbackVisible(false), 3000);
+      return;
+    }
+
+    try {
+      await withNetworkErrorHandling(async () => {
+        setVerifyingAccount(true);
+        console.log('✅ Verifying student account for doc id:', docId);
+        const studentDocRef = doc(db, 'users', docId);
+        const nowIso = new Date().toISOString();
+
+        await updateDoc(studentDocRef, {
+          verificationStatus: 'verified',
+          verifiedAt: nowIso,
+          updatedAt: nowIso,
+        });
+
+        // Write a verification alert for the student
+        try {
+          const sid = String(currentStudent.studentId || currentStudent.id);
+          if (sid) {
+            const studentAlertsRef = doc(db, 'student_alerts', sid);
+            const notif = {
+              id: `account_verified_${sid}_${Date.now()}`,
+              type: 'account_verified',
+              title: 'Account Verified',
+              message: 'Your student account has been verified. You now have full access to all student features.',
+              createdAt: nowIso,
+              status: 'unread',
+              studentId: sid,
+            };
+            try {
+              const snap = await getDoc(studentAlertsRef);
+              if (snap.exists()) {
+                await updateDoc(studentAlertsRef, { items: arrayUnion(notif) });
+              } else {
+                await setDoc(studentAlertsRef, { items: [notif] }, { merge: true });
+              }
+            } catch {
+              await setDoc(studentAlertsRef, { items: arrayUnion(notif) }, { merge: true });
+            }
+          }
+        } catch (e) {
+          console.log('Error writing account_verified alert (non‑critical):', e);
+        }
+
+        // Log admin activity
+        try {
+          const activityRef = doc(db, 'admin_activity_logs', 'global');
+          const activitySnap = await getDoc(activityRef);
+          const items = activitySnap.exists()
+            ? (Array.isArray(activitySnap.data()?.items) ? activitySnap.data().items : [])
+            : [];
+          const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          const newItem = {
+            id,
+            type: 'student_verified',
+            title: 'Student Account Verified',
+            message: `Verified student account: ${currentStudent.firstName} ${currentStudent.lastName} (${currentStudent.studentId})`,
+            createdAt: nowIso,
+            status: 'unread',
+            student: {
+              id: docId,
+              firstName: currentStudent.firstName,
+              lastName: currentStudent.lastName,
+              studentId: currentStudent.studentId,
+            },
+          };
+          await setDoc(activityRef, { items: [newItem, ...items] }, { merge: true });
+        } catch (logError) {
+          console.log('Failed to log verification activity (non‑critical):', logError);
+        }
+
+        setFeedbackTitle('Success');
+        setFeedbackMessage('Student account has been verified.');
+        setFeedbackTextColor('#16A34A');
+        setFeedbackVisible(true);
+
+        // Local optimistic update
+        setCurrentStudent(prev => ({
+          ...prev,
+          verificationStatus: 'verified',
+          verifiedAt: nowIso,
+        }));
+
+        setTimeout(() => {
+          setFeedbackVisible(false);
+        }, 2000);
+      });
+    } catch (error) {
+      console.error('Error verifying student account:', error);
+      const errorInfo = getNetworkErrorMessage(error);
+      if (error.type === 'no_internet' || error.type === 'timeout' || error.type === 'unstable_connection') {
+        setNetworkErrorTitle(errorInfo.title);
+        setNetworkErrorMessage(errorInfo.message);
+        setNetworkErrorColor(errorInfo.color);
+        setNetworkErrorVisible(true);
+        setTimeout(() => setNetworkErrorVisible(false), 5000);
+      } else {
+        setFeedbackTitle('Error');
+        setFeedbackMessage('Failed to verify student account.');
+        setFeedbackTextColor('#DC2626');
+        setFeedbackVisible(true);
+        setTimeout(() => setFeedbackVisible(false), 3000);
+      }
+    } finally {
+      setVerifyingAccount(false);
+      setVerifyConfirmVisible(false);
     }
   };
 
@@ -1282,16 +1405,35 @@ const StudentProfile = () => {
           </TouchableOpacity>
         </View>
       ) : (
-        <TouchableOpacity
-          style={styles.deleteAccountButtonContainer}
-          activeOpacity={0.85}
-          onPress={() => setDeleteConfirmVisible(true)}
-          disabled={deletingAccount}
-        >
-          <View style={[styles.deleteAccountButton, deletingAccount && styles.deleteAccountButtonDisabled]}>
-            <Text style={styles.deleteAccountButtonText}>Delete Account</Text>
+        isPendingVerification ? (
+          <View style={styles.bottomButtonContainer}>
+            <TouchableOpacity
+              style={[styles.bottomButton, styles.bottomSaveButton, (verifyingAccount || deletingAccount) && styles.bottomButtonDisabled]}
+              onPress={() => setVerifyConfirmVisible(true)}
+              disabled={verifyingAccount || deletingAccount}
+            >
+              <Text style={styles.bottomSaveButtonText}>Verify</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.bottomButton, styles.bottomDeleteInlineButton, (deletingAccount || verifyingAccount) && styles.bottomButtonDisabled]}
+              onPress={() => setDeleteConfirmVisible(true)}
+              disabled={deletingAccount || verifyingAccount}
+            >
+              <Text style={styles.bottomDeleteInlineText}>Delete</Text>
+            </TouchableOpacity>
           </View>
-        </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={styles.deleteAccountButtonContainer}
+            activeOpacity={0.85}
+            onPress={() => setDeleteConfirmVisible(true)}
+            disabled={deletingAccount}
+          >
+            <View style={[styles.deleteAccountButton, deletingAccount && styles.deleteAccountButtonDisabled]}>
+              <Text style={styles.deleteAccountButtonText}>Delete Account</Text>
+            </View>
+          </TouchableOpacity>
+        )
       )}
 
       {/* Delete Student Confirmation Modal */}
@@ -1325,6 +1467,42 @@ const StudentProfile = () => {
               >
                 <Text style={styles.fbModalConfirmText}>
                   {deletingAccount ? 'Deleting...' : 'Confirm'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Verify Student Confirmation Modal */}
+      <Modal transparent animationType="fade" visible={verifyConfirmVisible} onRequestClose={() => !verifyingAccount && setVerifyConfirmVisible(false)}>
+        <View style={styles.modalOverlayCenter}>
+          <View style={styles.fbModalCard}>
+            <View style={styles.fbModalContent}>
+              <Text style={styles.fbModalTitle}>Verify Student?</Text>
+              <Text style={styles.fbModalMessage}>
+                Are you sure you want to verify this student account? This will allow the student to access all features.
+              </Text>
+            </View>
+            <View style={styles.fbModalButtonContainer}>
+              <TouchableOpacity 
+                style={[styles.fbModalCancelButton, verifyingAccount && styles.fbModalButtonDisabled]} 
+                onPress={() => !verifyingAccount && setVerifyConfirmVisible(false)}
+                disabled={verifyingAccount}
+              >
+                <Text style={styles.fbModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[
+                  styles.fbModalConfirmButton, 
+                  { backgroundColor: '#004f89' },
+                  verifyingAccount && styles.fbModalButtonDisabled
+                ]} 
+                onPress={verifyStudentAccount}
+                disabled={verifyingAccount}
+              >
+                <Text style={styles.fbModalConfirmText}>
+                  {verifyingAccount ? 'Verifying...' : 'Confirm'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1684,6 +1862,16 @@ const styles = StyleSheet.create({
   },
   bottomSaveButtonText: {
     color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  bottomDeleteInlineButton: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#991B1B',
+  },
+  bottomDeleteInlineText: {
+    color: '#991B1B',
     fontSize: 14,
     fontWeight: '700',
   },

@@ -858,6 +858,8 @@ const RegisterScreen = () => {
       const generatedParentId = role.toLowerCase() === 'parent' ? generateParentId() : null;
 
       // Prepare user data
+      const normalizedRole = role.toLowerCase();
+      const isStudentRole = normalizedRole === 'student';
       const userData = {
         uid: user.uid,
         lastName: lastName.trim(), 
@@ -868,13 +870,19 @@ const RegisterScreen = () => {
         birthday: birthday instanceof Date ? birthday.toISOString().split('T')[0] : null, 
         contactNumber, 
         address: address.trim(),
-        course: role === 'parent' ? '' : course,
-        section: role === 'parent' ? '' : section,
-        yearLevel: role === 'parent' ? '' : yearLevel,
-        studentId: role === 'parent' ? null : studentId,
+        course: normalizedRole === 'parent' ? '' : course,
+        section: normalizedRole === 'parent' ? '' : section,
+        yearLevel: normalizedRole === 'parent' ? '' : yearLevel,
+        studentId: normalizedRole === 'parent' ? null : studentId,
         parentId: generatedParentId,
         email: email.trim().toLowerCase(), 
-        role: role.toLowerCase(),
+        role: normalizedRole,
+        // Newly registered students must be verified by an admin
+        // isVerify: false  -> show VerifyDashboard (cannot access other screens)
+        // isVerify: true   -> allow full navigation
+        isVerify: isStudentRole ? false : true,
+        // Keep a simple status string for admin/debugging (optional)
+        verificationStatus: isStudentRole ? 'pending' : 'approved',
         createdAt: new Date().toISOString(),
       };
 

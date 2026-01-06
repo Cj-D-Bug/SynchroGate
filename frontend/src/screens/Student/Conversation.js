@@ -179,6 +179,52 @@ export default function Conversation() {
     }
   };
 
+  const sendChatAlertToCounterpart = async (text) => {
+    try {
+      const nowIso = new Date().toISOString();
+      if (isStudentConversation) {
+        const targetStudentId = studentIdNumber || studentId;
+        if (!targetStudentId) return;
+        const alertsRef = doc(db, 'student_alerts', String(targetStudentId));
+        const snap = await getDoc(alertsRef);
+        const items = Array.isArray(snap.data()?.items) ? snap.data().items : [];
+        const alertId = `chat_${conversationId}_${Date.now()}`;
+        const alertPayload = {
+          id: alertId,
+          type: 'chat_message',
+          title: `New message from ${user?.firstName || 'Student'}`,
+          message: text,
+          status: 'unread',
+          conversationId,
+          studentId: targetStudentId,
+          createdAt: nowIso,
+        };
+        await setDoc(alertsRef, { items: [...items, alertPayload] }, { merge: true });
+      } else {
+        const targetParentId = parentIdNumber || parentId;
+        if (!targetParentId) return;
+        const alertsRef = doc(db, 'parent_alerts', String(targetParentId));
+        const snap = await getDoc(alertsRef);
+        const items = Array.isArray(snap.data()?.items) ? snap.data().items : [];
+        const alertId = `chat_${conversationId}_${Date.now()}`;
+        const alertPayload = {
+          id: alertId,
+          type: 'chat_message',
+          title: `New message from ${user?.firstName || 'Student'}`,
+          message: text,
+          status: 'unread',
+          conversationId,
+          parentId: targetParentId,
+          studentId: user?.studentId || user?.uid || null,
+          createdAt: nowIso,
+        };
+        await setDoc(alertsRef, { items: [...items, alertPayload] }, { merge: true });
+      }
+    } catch (error) {
+      console.warn('Failed to write chat alert:', error?.message);
+    }
+  };
+
   const sendMessage = async () => {
     const text = String(input || '').trim();
     if (!text || !conversationId || !user?.uid) return;
@@ -192,6 +238,7 @@ export default function Conversation() {
       const msgsCol = collection(db, 'conversations', conversationId, 'messages');
       await addDoc(msgsCol, { senderId: user.uid, text, createdAt: serverTimestamp(), status: 'sent' });
       setInput('');
+      await sendChatAlertToCounterpart(text);
       // clear pending on success after a short delay (snapshot will render real one)
       setTimeout(() => setPendingMessage(null), 500);
     } catch (e) {

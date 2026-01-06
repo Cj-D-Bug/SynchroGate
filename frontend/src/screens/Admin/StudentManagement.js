@@ -192,6 +192,73 @@ const StudentManagement = () => {
     loadAllStudents();
   }, []);
 
+  // Real-time listener: refresh list when any student document changes (e.g., verification)
+  useEffect(() => {
+    const studentsQuery = query(collection(db, 'users'), where('role', '==', 'student'));
+    let firstSnapshot = true;
+
+    const unsubscribe = onSnapshot(
+      studentsQuery,
+      (snap) => {
+        const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        setStudents(items);
+        if (firstSnapshot) {
+          setLoading(false);
+          firstSnapshot = false;
+        }
+      },
+      (error) => {
+        console.error('Error listening to students collection:', error);
+        setError('Failed to load students');
+        setLoading(false);
+      }
+    );
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
+
+  // Update listItems when students change and we're viewing a filtered list
+  useEffect(() => {
+    if (selectedYear) {
+      // Filter and sort students for the selected year
+      const yearStudents = students.filter(s => {
+        const str = String(s.yearLevel ?? '').toLowerCase();
+        const n = parseInt(str, 10);
+        const yr = !isNaN(n) ? n : (/1|first/.test(str) ? 1 : /2|second/.test(str) ? 2 : /3|third/.test(str) ? 3 : /4|fourth/.test(str) ? 4 : null);
+        return yr === selectedYear;
+      });
+      yearStudents.sort((a, b) => {
+        const al = String(a.lastName || '').toLowerCase();
+        const bl = String(b.lastName || '').toLowerCase();
+        const cmp = al.localeCompare(bl);
+        if (cmp !== 0) return cmp;
+        const af = String(a.firstName || '').toLowerCase();
+        const bf = String(b.firstName || '').toLowerCase();
+        return af.localeCompare(bf);
+      });
+      setListItems(yearStudents);
+    } else if (selectedCourse) {
+      // Filter and sort students for the selected course
+      const target = String(selectedCourse || '').trim().toLowerCase();
+      const courseStudents = students.filter(s => {
+        const c = String(s.course || '').trim().toLowerCase();
+        return c === target;
+      });
+      courseStudents.sort((a, b) => {
+        const al = String(a.lastName || '').toLowerCase();
+        const bl = String(b.lastName || '').toLowerCase();
+        const cmp = al.localeCompare(bl);
+        if (cmp !== 0) return cmp;
+        const af = String(a.firstName || '').toLowerCase();
+        const bf = String(b.firstName || '').toLowerCase();
+        return af.localeCompare(bf);
+      });
+      setListItems(courseStudents);
+    }
+  }, [students, selectedYear, selectedCourse]);
+
   // Always refresh when screen becomes active
   useFocusEffect(
     React.useCallback(() => {
@@ -402,6 +469,22 @@ const StudentManagement = () => {
     return iconMap[courseUpper] || 'school-outline'; // Default icon for unknown courses
   };
 
+  // Unverified = newly created / not yet approved
+  const isUnverifiedStudent = (student) => {
+    // Check verificationStatus: 'pending' means waiting for verification
+    const verificationStatus = String(student?.verificationStatus || '').trim().toLowerCase();
+    if (verificationStatus === 'pending') return true;
+    // If verificationStatus exists and is not pending, treat as verified
+    if (verificationStatus) return false;
+
+    // Fallback: only use isVerify when verificationStatus is absent (legacy data)
+    if (student && Object.prototype.hasOwnProperty.call(student, 'isVerify')) {
+      return student.isVerify === false;
+    }
+    // If field is missing, treat as verified (for older data)
+    return false;
+  };
+
   const fetchStudentsForYear = async (year) => {
     setListLoading(true);
     try {
@@ -491,6 +574,15 @@ const StudentManagement = () => {
   const toggleSelect = (studentId) => {
     if (!isSelectionMode) return; // Only allow selection in selection mode
     
+    // Find the student to check if they're unverified
+    const student = listItems.find(s => s.id === studentId) || 
+                    students.find(s => s.id === studentId);
+    
+    // Prevent selecting unverified students
+    if (student && isUnverifiedStudent(student)) {
+      return;
+    }
+    
     const newSelected = new Set(selectedIds);
     if (newSelected.has(studentId)) {
       newSelected.delete(studentId);
@@ -502,13 +594,21 @@ const StudentManagement = () => {
 
   const handleRowPress = (student) => {
     if (isSelectionMode) {
-      toggleSelect(student.id);
+      // Don't allow selecting unverified students
+      if (!isUnverifiedStudent(student)) {
+        toggleSelect(student.id);
+      }
     } else {
       openQrDetail(student);
     }
   };
 
   const handleRowLongPress = (student) => {
+    // Don't allow activating selection mode for unverified students
+    if (isUnverifiedStudent(student)) {
+      return;
+    }
+    
     // Activate selection mode on long press
     if (!isSelectionMode) {
       setIsSelectionMode(true);
@@ -605,16 +705,21 @@ const StudentManagement = () => {
   };
 
   const selectAllStudents = () => {
-    const allStudentIds = new Set(listItems.map(s => s.id));
-    const allSelected = allStudentIds.size > 0 && selectedIds.size === allStudentIds.size && 
-                       Array.from(allStudentIds).every(id => selectedIds.has(id));
+    // Only select verified students (exclude unverified ones)
+    const verifiedStudentIds = new Set(
+      listItems
+        .filter(s => !isUnverifiedStudent(s))
+        .map(s => s.id)
+    );
+    const allSelected = verifiedStudentIds.size > 0 && selectedIds.size === verifiedStudentIds.size && 
+                       Array.from(verifiedStudentIds).every(id => selectedIds.has(id));
     
     if (allSelected) {
       // Unselect all
       setSelectedIds(new Set());
     } else {
-      // Select all
-      setSelectedIds(allStudentIds);
+      // Select all verified students only
+      setSelectedIds(verifiedStudentIds);
     }
   };
 
@@ -1553,6 +1658,10 @@ const StudentManagement = () => {
                   <View style={styles.headerContainer}>
                     <View style={styles.legendContainer}>
                       <View style={styles.legendItem}>
+                        <View style={[styles.legendDot, { backgroundColor: '#FEF3C7' }]} />
+                        <Text style={styles.legendText}>Verification</Text>
+                      </View>
+                      <View style={styles.legendItem}>
                         <View style={[styles.legendDot, { backgroundColor: '#FEE2E2' }]} />
                         <Text style={styles.legendText}>No QR Code</Text>
                       </View>
@@ -1564,13 +1673,18 @@ const StudentManagement = () => {
                     <View style={styles.badgeContainer}>
                       {isSelectionMode && (
                         <TouchableOpacity style={styles.selectAllBadge} onPress={() => {
-                          const allResultIds = new Set(results.map(r => r.id));
-                          const allSelected = allResultIds.size > 0 && selectedIds.size === allResultIds.size && 
-                                             Array.from(allResultIds).every(id => selectedIds.has(id));
+                          // Only select verified students (exclude unverified ones)
+                          const verifiedResultIds = new Set(
+                            results
+                              .filter(r => !isUnverifiedStudent(r))
+                              .map(r => r.id)
+                          );
+                          const allSelected = verifiedResultIds.size > 0 && selectedIds.size === verifiedResultIds.size && 
+                                             Array.from(verifiedResultIds).every(id => selectedIds.has(id));
                           if (allSelected) {
                             setSelectedIds(new Set());
                           } else {
-                            setSelectedIds(allResultIds);
+                            setSelectedIds(verifiedResultIds);
                           }
                         }}>
                           <Text style={styles.selectAllText}>Select All</Text>
@@ -1583,24 +1697,56 @@ const StudentManagement = () => {
                   </View>
                   <View>
                     {results.map((s) => {
+                      // Check verificationStatus first
+                      const verificationStatus = String(s?.verificationStatus || '').toLowerCase();
+                      const isPending = verificationStatus === 'pending';
+                      const isVerified = verificationStatus === 'verified';
+                      
                       const qrStatus = searchResultsQRStatus.get(s.id) || { hasQR: false, isNew: false };
                       const hasQR = qrStatus.hasQR;
-                      const rowStyle = qrStatus.hasQR 
-                        ? (qrStatus.isNew ? styles.studentRowNewQR : styles.studentRow)
-                        : styles.studentRowNoQR;
+                      
+                      // Determine row style based on verificationStatus and QR code:
+                      // - If pending: light yellow (studentRowVerify)
+                      // - If verified but no QR: light red (studentRowNoQR)
+                      // - If verified and has QR: normal or green if new
+                      let rowStyle;
+                      if (isPending) {
+                        rowStyle = styles.studentRowVerify;
+                      } else if (isVerified && !hasQR) {
+                        rowStyle = styles.studentRowNoQR;
+                      } else if (hasQR) {
+                        rowStyle = qrStatus.isNew ? styles.studentRowNewQR : styles.studentRow;
+                      } else {
+                        // Fallback: treat as verified if no verificationStatus field (older data)
+                        rowStyle = styles.studentRowNoQR;
+                      }
+                      
+                      const pendingVerify = isPending;
                       
                       const isSelected = selectedIds.has(s.id);
                       const finalRowStyle = isSelected 
                         ? [rowStyle, styles.studentRowSelected]
                         : rowStyle;
                       
+                      // In selection mode, unverified students cannot be selected
+                      const isSelectable = !isSelectionMode || !pendingVerify;
+                      
                       return (
                         <TouchableOpacity 
                           key={s.id} 
                           style={finalRowStyle}
-                          activeOpacity={0.7}
-                          onPress={() => handleRowPress(s)}
-                          onLongPress={() => handleRowLongPress(s)}
+                          activeOpacity={isSelectable ? 0.7 : 0.3}
+                          onPress={() => {
+                            if (isSelectable) {
+                              handleRowPress(s);
+                            }
+                          }}
+                          onLongPress={() => {
+                            if (isSelectable) {
+                              handleRowLongPress(s);
+                            }
+                          }}
+                          disabled={!isSelectable}
                         >
                           <View style={styles.studentAvatar}>
                             <Text style={styles.studentInitials}>{(s.firstName?.[0] || 'S').toUpperCase()}</Text>
@@ -1624,9 +1770,19 @@ const StudentManagement = () => {
                               })()}
                             </Text>
                           </View>
-                          {!hasQR && (
+                          {isPending && (
+                            <View style={styles.verifyingBadge}>
+                              <Text style={styles.verifyingBadgeText}>Verify</Text>
+                            </View>
+                          )}
+                          {!isPending && !hasQR && (
                             <View style={styles.noQrBadge}>
                               <Text style={styles.noQrBadgeText}>No QR</Text>
+                            </View>
+                          )}
+                          {isSelectionMode && pendingVerify && (
+                            <View style={styles.unselectableIndicator}>
+                              <Text style={styles.unselectableText}>Verify first</Text>
                             </View>
                           )}
                         </TouchableOpacity>
@@ -1776,6 +1932,10 @@ const StudentManagement = () => {
                   <View style={styles.headerContainer}>
                     <View style={styles.legendContainer}>
                       <View style={styles.legendItem}>
+                        <View style={[styles.legendDot, { backgroundColor: '#FEF3C7' }]} />
+                        <Text style={styles.legendText}>Verification</Text>
+                      </View>
+                      <View style={styles.legendItem}>
                         <View style={[styles.legendDot, { backgroundColor: '#FEE2E2' }]} />
                         <Text style={styles.legendText}>No QR Code</Text>
                       </View>
@@ -1797,24 +1957,56 @@ const StudentManagement = () => {
                   </View>
                   <View>
                     {listItems.map(s => {
+                      // Check verificationStatus first
+                      const verificationStatus = String(s?.verificationStatus || '').toLowerCase();
+                      const isPending = verificationStatus === 'pending';
+                      const isVerified = verificationStatus === 'verified';
+                      
                       const hasQR = studentsWithQR.has(s.id);
                       const qrStatus = listItemsQRStatus.get(s.id) || { hasQR: false, isNew: false };
-                      const rowStyle = qrStatus.hasQR 
-                        ? (qrStatus.isNew ? styles.studentRowNewQR : styles.studentRow)
-                        : styles.studentRowNoQR;
+                      
+                      // Determine row style based on verificationStatus and QR code:
+                      // - If pending: light yellow (studentRowVerify)
+                      // - If verified but no QR: light red (studentRowNoQR)
+                      // - If verified and has QR: normal or green if new
+                      let rowStyle;
+                      if (isPending) {
+                        rowStyle = styles.studentRowVerify;
+                      } else if (isVerified && !hasQR) {
+                        rowStyle = styles.studentRowNoQR;
+                      } else if (hasQR) {
+                        rowStyle = qrStatus.isNew ? styles.studentRowNewQR : styles.studentRow;
+                      } else {
+                        // Fallback: treat as verified if no verificationStatus field (older data)
+                        rowStyle = styles.studentRowNoQR;
+                      }
+                      
+                      const pendingVerify = isPending;
                       
                       const isSelected = selectedIds.has(s.id);
                       const finalRowStyle = isSelected 
                         ? [rowStyle, styles.studentRowSelected]
                         : rowStyle;
                       
+                      // In selection mode, unverified students cannot be selected
+                      const isSelectable = !isSelectionMode || !pendingVerify;
+                      
                       return (
                       <TouchableOpacity 
                         key={s.id} 
                         style={finalRowStyle}
-                        activeOpacity={0.7}
-                        onPress={() => handleRowPress(s)}
-                        onLongPress={() => handleRowLongPress(s)}
+                        activeOpacity={isSelectable ? 0.7 : 0.3}
+                        onPress={() => {
+                          if (isSelectable) {
+                            handleRowPress(s);
+                          }
+                        }}
+                        onLongPress={() => {
+                          if (isSelectable) {
+                            handleRowLongPress(s);
+                          }
+                        }}
+                        disabled={!isSelectable}
                       >
                         <View style={styles.studentAvatar}><Text style={styles.studentInitials}>{(s.firstName?.[0] || 'S').toUpperCase()}</Text></View>
                         <View style={{ flex: 1 }}>
@@ -1836,9 +2028,19 @@ const StudentManagement = () => {
                             })()}
                           </Text>
                         </View>
-                        {!hasQR && (
+                        {isPending && (
+                          <View style={styles.verifyingBadge}>
+                            <Text style={styles.verifyingBadgeText}>Verify</Text>
+                          </View>
+                        )}
+                        {!isPending && !hasQR && (
                           <View style={styles.noQrBadge}>
                             <Text style={styles.noQrBadgeText}>No QR</Text>
+                          </View>
+                        )}
+                        {isSelectionMode && pendingVerify && (
+                          <View style={styles.unselectableIndicator}>
+                            <Text style={styles.unselectableText}>Verify first</Text>
                           </View>
                         )}
                       </TouchableOpacity>
@@ -2206,10 +2408,41 @@ const styles = StyleSheet.create({
   centerRow: { alignItems: 'center', justifyContent: 'center', paddingVertical: 16 },
   emptyText: { color: '#6B7280' },
   studentRow: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', borderRadius: 6, marginHorizontal: 2, marginVertical: 1 },
+  studentRowVerify: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', borderRadius: 6, marginHorizontal: 2, marginVertical: 1, backgroundColor: '#FEF3C7' },
   studentMeta: { color: '#6B7280', fontSize: 11 },
   studentActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   noQrBadge: { backgroundColor: '#FEF2F2', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, borderWidth: 1, borderColor: '#FECACA', marginRight: 8, alignSelf: 'center' },
   noQrBadgeText: { color: '#DC2626', fontSize: 10, fontWeight: '600' },
+  verifyingBadge: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FBBF24',
+    marginRight: 8,
+    alignSelf: 'center',
+  },
+  verifyingBadgeText: {
+    color: '#92400E',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  unselectableIndicator: {
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    marginRight: 8,
+    alignSelf: 'center',
+  },
+  unselectableText: {
+    color: '#6B7280',
+    fontSize: 9,
+    fontWeight: '600',
+  },
   checkboxWrap: { paddingHorizontal: 8, paddingVertical: 6 },
   detailMeta: { fontSize: 11, color: '#9CA3AF', marginTop: 4 },
   noResultCard: { alignItems: 'center', paddingVertical: 24, paddingHorizontal: 16 },

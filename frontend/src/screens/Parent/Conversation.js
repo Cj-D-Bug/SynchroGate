@@ -147,6 +147,31 @@ export default function Conversation() {
     }
   };
 
+  const sendChatAlertToStudent = async (text) => {
+    try {
+      const targetStudentId = studentIdNumber || studentId;
+      if (!targetStudentId) return;
+      const alertsRef = doc(db, 'student_alerts', String(targetStudentId));
+      const snap = await getDoc(alertsRef);
+      const items = Array.isArray(snap.data()?.items) ? snap.data().items : [];
+      const alertId = `chat_${conversationId}_${Date.now()}`;
+      const alertPayload = {
+        id: alertId,
+        type: 'chat_message',
+        title: `New message from ${user?.firstName || 'Parent'}`,
+        message: text,
+        status: 'unread',
+        conversationId,
+        parentId: user?.parentId || user?.uid || null,
+        studentId: targetStudentId,
+        createdAt: new Date().toISOString(),
+      };
+      await setDoc(alertsRef, { items: [...items, alertPayload] }, { merge: true });
+    } catch (error) {
+      console.warn('Failed to write chat alert for student:', error?.message);
+    }
+  };
+
   const sendMessage = async () => {
     const text = String(input || '').trim();
     if (!text || !conversationId || !user?.uid) return;
@@ -160,6 +185,7 @@ export default function Conversation() {
       const msgsCol = collection(db, 'conversations', conversationId, 'messages');
       await addDoc(msgsCol, { senderId: user.uid, text, createdAt: serverTimestamp(), status: 'sent' });
       setInput('');
+      await sendChatAlertToStudent(text);
       // clear pending on success after a short delay (snapshot will render real one)
       setTimeout(() => setPendingMessage(null), 500);
     } catch (error) {

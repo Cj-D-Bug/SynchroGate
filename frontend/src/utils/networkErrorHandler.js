@@ -22,9 +22,14 @@ export const checkInternetConnection = async () => {
 };
 
 /**
- * Wraps a network operation with timeout and connection checking
- * @param {Promise} operation - The network operation to execute
- * @param {number} timeoutMs - Timeout in milliseconds (default: 60000 = 1 minute)
+ * Wraps a network operation with timeout and connection checking.
+ *
+ * NOTE: `operation` MUST be a function that returns a Promise, e.g.
+ *   () => someAsyncCall()
+ *   async () => { await ... }
+ *
+ * @param {() => Promise<any>} operation - The network operation to execute
+ * @param {number} timeoutMs - Timeout in milliseconds (default: 120000 = 2 minutes)
  * @returns {Promise} - Resolves with operation result or rejects with error info
  */
 export const withNetworkErrorHandling = async (operation, timeoutMs = 120000) => {
@@ -48,11 +53,11 @@ export const withNetworkErrorHandling = async (operation, timeoutMs = 120000) =>
     // Only use timeout for operations that are expected to take a long time
     if (timeoutMs < 120000) {
       // Short timeout operations - use race
-      const result = await Promise.race([operation, timeoutPromise]);
+      const result = await Promise.race([operation(), timeoutPromise]);
       return result;
     } else {
       // Long timeout or no timeout - execute directly
-      return await operation;
+      return await operation();
     }
   } catch (error) {
     // If it's already our custom error, re-throw it

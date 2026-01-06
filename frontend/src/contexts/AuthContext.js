@@ -3,6 +3,7 @@ import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { auth, db } from "../utils/firebaseConfig";
+import { BASE_URL } from "../utils/apiConfig";
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -14,6 +15,7 @@ import { doc, setDoc, getDoc, updateDoc, collection, query, where, getDocs, dele
 // Removed: globalPushNotificationService and globalParentPushNotificationService
 // Backend now handles all push notifications automatically via alertPushService
 import { generateAndSavePushToken } from "../utils/pushTokenGenerator";
+import { updateUserFcmTokenInLinks } from "../utils/linkFcmTokenManager";
 
 export const AuthContext = createContext();
 
@@ -144,86 +146,115 @@ export const AuthProvider = ({ children }) => {
     if (!user?.uid) return;
     
     try {
-      const userDocRef = doc(db, "users", user.uid);
-      const userSnap = await getDoc(userDocRef);
+      // Try multiple document ID possibilities:
+      // 1. user.id (if set, e.g., studentId)
+      // 2. user.studentId (for students)
+      // 3. user.uid (Firebase Auth UID)
+      const possibleIds = [
+        user?.id,
+        user?.studentId,
+        user?.uid,
+      ].filter(Boolean);
       
-      if (userSnap.exists()) {
-        const userData = userSnap.data();
-        userData.role = userData.role?.toLowerCase() || "student";
-        
-        // Ensure proper field assignment based on role
-        if (userData.role !== "student") {
-          userData.studentId = null;
-          userData.course = "";
-          userData.section = "";
-          userData.yearLevel = "";
+      let userSnap = null;
+      let userDocRef = null;
+      
+      // Try each ID until we find the document
+      for (const docId of possibleIds) {
+        try {
+          userDocRef = doc(db, "users", String(docId));
+          userSnap = await getDoc(userDocRef);
+          if (userSnap.exists()) {
+            console.log(`✅ Found user document with ID: ${docId}`);
+            break;
+          }
+        } catch (err) {
+          console.log(`⚠️ Failed to fetch user document with ID ${docId}:`, err);
+          continue;
         }
-        
-        if (userData.role !== "parent") {
-          userData.parentId = null;
-        }
-        
-        // Validate role
-        if (!['student', 'parent', 'admin', 'developer'].includes(userData.role)) {
-          console.error('Invalid role in refreshUserData:', userData.role);
-          throw new Error('Invalid user role detected. Please contact support.');
-        }
-        
-        // Additional validation for role format
-        if (typeof userData.role !== 'string' || userData.role.trim().length === 0) {
-          console.error('Invalid role format in refreshUserData:', userData.role);
-          throw new Error('Invalid user role format. Please contact support.');
-        }
-        
-        // Additional validation for role format
-        if (!/^[a-zA-Z]+$/.test(userData.role.trim())) {
-          console.error('Invalid role format in refreshUserData:', userData.role);
-          throw new Error('Invalid user role format. Please contact support.');
-        }
-        
-        // Additional validation for role length
-        if (userData.role.trim().length > 20) {
-          console.error('Invalid role length in refreshUserData:', userData.role);
-          throw new Error('Invalid user role length. Please contact support.');
-        }
-        
-        // Additional validation for role length
-        if (userData.role.trim().length < 3) {
-          console.error('Invalid role length in refreshUserData:', userData.role);
-          throw new Error('Invalid user role length. Please contact support.');
-        }
-        
-        // Additional validation for role format
-        if (!/^[a-zA-Z]+$/.test(userData.role.trim())) {
-          console.error('Invalid role format in refreshUserData:', userData.role);
-          throw new Error('Invalid user role format. Please contact support.');
-        }
-        
-        // Additional validation for role consistency
-        if (userData.role === 'student' && userData.parentId) {
-          console.warn('Student account has parentId in refreshUserData, clearing it:', userData.parentId);
-          userData.parentId = null;
-        }
-        
-        if (userData.role === 'parent' && userData.studentId) {
-          console.warn('Parent account has studentId in refreshUserData, clearing it:', userData.studentId);
-          userData.studentId = null;
-        }
-        
-        // Additional validation for role format
-        if (userData.role !== userData.role?.toLowerCase()) {
-          console.warn('Role case mismatch in refreshUserData:', { 
-            originalRole: userData.role, 
-            normalizedRole: userData.role?.toLowerCase() 
-          });
-        }
-        
-        setUser(userData);
-        setRole(userData.role);
-        await AsyncStorage.setItem("user", JSON.stringify(userData));
-        
-        return userData;
       }
+      
+      if (!userSnap || !userSnap.exists()) {
+        console.error("❌ User document not found with any ID:", possibleIds);
+        return null;
+      }
+      
+      const userData = userSnap.data();
+      userData.id = userSnap.id; // Store the actual document ID
+      userData.role = userData.role?.toLowerCase() || "student";
+      
+      // Ensure proper field assignment based on role
+      if (userData.role !== "student") {
+        userData.studentId = null;
+        userData.course = "";
+        userData.section = "";
+        userData.yearLevel = "";
+      }
+      
+      if (userData.role !== "parent") {
+        userData.parentId = null;
+      }
+      
+      // Validate role
+      if (!['student', 'parent', 'admin', 'developer'].includes(userData.role)) {
+        console.error('Invalid role in refreshUserData:', userData.role);
+        throw new Error('Invalid user role detected. Please contact support.');
+      }
+      
+      // Additional validation for role format
+      if (typeof userData.role !== 'string' || userData.role.trim().length === 0) {
+        console.error('Invalid role format in refreshUserData:', userData.role);
+        throw new Error('Invalid user role format. Please contact support.');
+      }
+      
+      // Additional validation for role format
+      if (!/^[a-zA-Z]+$/.test(userData.role.trim())) {
+        console.error('Invalid role format in refreshUserData:', userData.role);
+        throw new Error('Invalid user role format. Please contact support.');
+      }
+      
+      // Additional validation for role length
+      if (userData.role.trim().length > 20) {
+        console.error('Invalid role length in refreshUserData:', userData.role);
+        throw new Error('Invalid user role length. Please contact support.');
+      }
+      
+      // Additional validation for role length
+      if (userData.role.trim().length < 3) {
+        console.error('Invalid role length in refreshUserData:', userData.role);
+        throw new Error('Invalid user role length. Please contact support.');
+      }
+      
+      // Additional validation for role format
+      if (!/^[a-zA-Z]+$/.test(userData.role.trim())) {
+        console.error('Invalid role format in refreshUserData:', userData.role);
+        throw new Error('Invalid user role format. Please contact support.');
+      }
+      
+      // Additional validation for role consistency
+      if (userData.role === 'student' && userData.parentId) {
+        console.warn('Student account has parentId in refreshUserData, clearing it:', userData.parentId);
+        userData.parentId = null;
+      }
+      
+      if (userData.role === 'parent' && userData.studentId) {
+        console.warn('Parent account has studentId in refreshUserData, clearing it:', userData.studentId);
+        userData.studentId = null;
+      }
+      
+      // Additional validation for role format
+      if (userData.role !== userData.role?.toLowerCase()) {
+        console.warn('Role case mismatch in refreshUserData:', { 
+          originalRole: userData.role, 
+          normalizedRole: userData.role?.toLowerCase() 
+        });
+      }
+      
+      setUser(userData);
+      setRole(userData.role);
+      await AsyncStorage.setItem("user", JSON.stringify(userData));
+      
+      return userData;
     } catch (err) {
       console.error("Refresh user data failed:", err);
       throw err;
@@ -262,6 +293,7 @@ export const AuthProvider = ({ children }) => {
       // Generate parentId for parent role - FIXED
       const generatedParentId = userRole.toLowerCase() === "parent" ? generateParentId() : null;
 
+      const isStudentRole = userRole.toLowerCase() === "student";
       const userData = {
         uid: firebaseUser.uid,
         lastName: lastName || "",
@@ -272,13 +304,19 @@ export const AuthProvider = ({ children }) => {
         birthday: birthday || "",
         contactNumber: contactNumber || "",
         address: address || "",
-        course: userRole.toLowerCase() === "student" ? (course || "") : "",
-        section: userRole.toLowerCase() === "student" ? (section || "") : "",
-        yearLevel: userRole.toLowerCase() === "student" ? (yearLevel || "") : "",
-        studentId: userRole.toLowerCase() === "student" ? studentId : null,
+        course: isStudentRole ? (course || "") : "",
+        section: isStudentRole ? (section || "") : "",
+        yearLevel: isStudentRole ? (yearLevel || "") : "",
+        studentId: isStudentRole ? studentId : null,
         parentId: generatedParentId,
         email: email || "",
         role: userRole.toLowerCase(),
+        // Newly registered students must be verified by an admin
+        // isVerify: false  -> show VerifyDashboard
+        // isVerify: true   -> allow normal student dashboard
+        isVerify: isStudentRole ? false : true,
+        // Keep verificationStatus for backward compatibility (not used by gating anymore)
+        verificationStatus: isStudentRole ? 'pending' : 'approved',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -742,7 +780,7 @@ export const AuthProvider = ({ children }) => {
     try {
       console.log('Starting logout process...');
       
-      // CRITICAL: Clear FCM token from Firestore BEFORE signing out
+      // CRITICAL: Clear FCM token from Firestore (users doc) AND links BEFORE signing out
       // This prevents backend from sending notifications to logged-out users
       if (user?.uid && user?.role) {
         try {
@@ -771,8 +809,15 @@ export const AuthProvider = ({ children }) => {
             pushTokenUpdatedAt: null,
             lastLoginAt: null, // CRITICAL: Clear login timestamp so backend won't send notifications
           });
+
+          // Also clear token from parent_student_links so linked users can't be targeted
+          try {
+            await updateUserFcmTokenInLinks(user, null);
+          } catch (linkClearError) {
+            console.warn('⚠️ Failed to clear FCM token in links on logout (non-blocking):', linkClearError);
+          }
           
-          console.log('✅ FCM token cleared from Firestore on logout');
+          console.log('✅ FCM token cleared from Firestore and links on logout');
         } catch (fcmError) {
           console.warn('⚠️ Failed to clear FCM token on logout (non-blocking):', fcmError);
           // Don't fail logout if FCM token clearing fails
@@ -1590,6 +1635,22 @@ export const AuthProvider = ({ children }) => {
       where('status', '==', 'active')
     ) : null;
 
+    const sendScheduleCurrentPush = async (alertPayload, parentDocId) => {
+      try {
+        await fetch(`${BASE_URL}/notifications/alert-push`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            alert: alertPayload,
+            userId: parentDocId,
+            role: 'parent'
+          })
+        });
+      } catch (error) {
+        console.warn('Failed to send schedule_current push:', error?.message);
+      }
+    };
+
     const onLinks = (linksSnap) => {
       try {
         const rawLinkData = linksSnap.docs.map(d => d.data());
@@ -1803,17 +1864,59 @@ export const AuthProvider = ({ children }) => {
               const pItems = latestSnap.exists() ? (Array.isArray(latestSnap.data()?.items) ? latestSnap.data().items : []) : [];
               const currentKeys = new Set(activeList.map(a => a.currentKey));
               // Remove stale or unmatched schedule_current alerts strictly
+              const NOW_MS = Date.now();
+              const RECENT_GRACE_MS = 10 * 60 * 1000; // keep recent items even if schedule data is briefly missing
+              const toMinutes = (h, m, ap) => {
+                let hh = h;
+                if (ap) {
+                  if (ap === 'PM' && hh !== 12) hh += 12;
+                  if (ap === 'AM' && hh === 12) hh = 0;
+                }
+                return hh * 60 + (m || 0);
+              };
+              const parseRangeEnd = (timeRange) => {
+                try {
+                  const raw = String(timeRange || '').trim();
+                  if (!raw) return null;
+                  const norm = raw.replace(/[–—−]/g, '-');
+                  const parts = norm.split('-').map(p => p.trim());
+                  if (parts.length !== 2) return null;
+                  const normalize = (s) => s.replace(/\s+/g, '').toUpperCase();
+                  const parsePart = (p) => {
+                    const n = normalize(p);
+                    let m = n.match(/^(\d{1,2}):(\d{2})(AM|PM)$/);
+                    if (m) return { h: parseInt(m[1],10), min: parseInt(m[2],10), ap: m[3] };
+                    m = n.match(/^(\d{1,2}):(\d{2})$/);
+                    if (m) return { h: parseInt(m[1],10), min: parseInt(m[2],10), ap: null };
+                    m = n.match(/^(\d{1,2})(\d{2})(AM|PM)$/);
+                    if (m) return { h: parseInt(m[1],10), min: parseInt(m[2],10), ap: m[3] };
+                    m = n.match(/^(\d{1,2})(\d{2})$/);
+                    if (m) return { h: parseInt(m[1],10), min: parseInt(m[2],10), ap: null };
+                    return null;
+                  };
+                  const end = parsePart(parts[1]);
+                  if (!end) return null;
+                  return toMinutes(end.h, end.min, end.ap);
+                } catch { return null; }
+              };
+              const nowMinOfDay = new Date().getHours() * 60 + new Date().getMinutes();
+              const END_GRACE_MIN = 5; // keep until a few minutes after class end
               let nextItems = pItems.filter((it) => {
                 if (!(it?.type === 'schedule_current' && String(it?.studentId) === String(sid))) return true;
+                const createdMs = new Date(it?.createdAt || 0).getTime();
                 const timeNow = isNowWithin(it.time);
                 const stillActiveKey = currentKeys.has(String(it.currentKey));
-                // Keep only if it's still within time AND key is still active; if there are no active keys, drop all
-                return timeNow && stillActiveKey;
+                const isRecent = Number.isFinite(createdMs) && (NOW_MS - createdMs) < RECENT_GRACE_MS;
+                const endMin = parseRangeEnd(it.time);
+                const beforeEnd = Number.isFinite(endMin) ? nowMinOfDay <= (endMin + END_GRACE_MIN) : true;
+                // Keep if still active OR very recent OR before scheduled end time (prevents early removal)
+                return (timeNow && stillActiveKey) || isRecent || beforeEnd;
               });
+              const newScheduleAlerts = [];
               for (const a of activeList) {
                 const exists = nextItems.some(it => it?.type === 'schedule_current' && String(it?.studentId) === String(sid) && it?.currentKey === a.currentKey);
                 if (!exists) {
-                  nextItems.push({
+                  const newItem = {
                     id: `sched_current_${sid}_${a.currentKey}`,
                     type: 'schedule_current',
                     title: 'Class Happening Now',
@@ -1826,7 +1929,9 @@ export const AuthProvider = ({ children }) => {
                     subject: a.subject,
                     time: a.time,
                     currentKey: a.currentKey,
-                  });
+                  };
+                  nextItems.push(newItem);
+                  newScheduleAlerts.push(newItem);
                 }
               }
               // De-duplicate by (studentId,currentKey) keeping the latest createdAt
@@ -1849,8 +1954,16 @@ export const AuthProvider = ({ children }) => {
                 nextItems = nextItems.filter(it => !(it?.type === 'schedule_current' && String(it?.studentId) === String(sid)));
               }
 
-              if (JSON.stringify(nextItems) !== JSON.stringify(pItems)) {
+              const hasChanges = JSON.stringify(nextItems) !== JSON.stringify(pItems);
+              if (hasChanges) {
                 await setDoc(parentAlertsRef2, { items: nextItems }, { merge: true });
+              }
+
+              // Fire push for any newly-created schedule_current alerts
+              if (newScheduleAlerts.length > 0) {
+                for (const alertPayload of newScheduleAlerts) {
+                  await sendScheduleCurrentPush(alertPayload, parentDocId2);
+                }
               }
             } catch {}
           });

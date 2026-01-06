@@ -1,13 +1,10 @@
 // pushTokenGenerator.js - Utility function to generate and save FCM tokens
 // Can be called from anywhere (not just React hooks)
+import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
-import { Platform } from 'react-native';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from './firebaseConfig';
-import { updateUserFcmTokenInLinks } from './linkFcmTokenManager';
-
-// Import Firebase initialization - ensures DEFAULT app exists
 import { initializeFirebaseNative, getFirebaseNativeApp } from './firebaseNativeInit';
 
 // CRITICAL: Ensure DEFAULT app is initialized before loading messaging

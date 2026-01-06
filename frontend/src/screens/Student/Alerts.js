@@ -82,6 +82,7 @@ const Alerts = () => {
     'attendance_scan': { label: 'Attendance Scan', icon: 'scan-outline', color: '#10B981' },
     'qr_generated': { label: 'QR Generated', icon: 'qr-code-outline', color: '#10B981' },
     'qr_changed': { label: 'QR Changed', icon: 'refresh-outline', color: '#3B82F6' },
+    'account_verified': { label: 'Account Verified', icon: 'shield-checkmark-outline', color: '#10B981' },
     'schedule_permission_response': { label: 'Schedule Permission Response', icon: 'lock-open-outline', color: '#F59E0B' },
   };
 

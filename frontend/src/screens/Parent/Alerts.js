@@ -473,7 +473,9 @@ const Alerts = () => {
           };
           const startTime = parseTime(start);
           const endTime = parseTime(end);
-          return now >= startTime && now <= endTime;
+          // 5 minute grace around start/end
+          const graceMs = 5 * 60 * 1000;
+          return now >= new Date(startTime.getTime() - graceMs) && now <= new Date(endTime.getTime() + graceMs);
         } catch { return false; }
       };
       
@@ -1201,6 +1203,10 @@ const Alerts = () => {
           const subjectsAny = sSnap.data()?.subjects;
           let hasValidSchedule = false;
           
+          const createdMs = new Date(it?.createdAt || 0).getTime();
+          const recentGraceMs = 10 * 60 * 1000;
+          const isRecent = Number.isFinite(createdMs) && (Date.now() - createdMs) < recentGraceMs;
+
           if (subjectsAny && !Array.isArray(subjectsAny) && typeof subjectsAny === 'object') {
             Object.keys(subjectsAny).forEach(subj => {
               const entries = Array.isArray(subjectsAny[subj]) ? subjectsAny[subj] : [];
@@ -1222,13 +1228,13 @@ const Alerts = () => {
             }
           }
           
-          if (!hasValidSchedule) {
+          // Keep if valid window OR very recent to avoid flicker
+          if (hasValidSchedule || isRecent) {
+            updated.push(it);
+          } else {
             console.log('🧹 CLEANUP: Removing schedule_current - no active class for student:', studentId);
             hasChanges = true;
-            continue; // Skip this notification
-          } else {
-            // Keep this notification - it's valid
-            updated.push(it);
+            continue;
           }
         } catch (error) {
           console.warn('Error checking schedule for cleanup:', error);
@@ -1841,9 +1847,6 @@ const Alerts = () => {
       </ScrollView>
     </View>
 
-      {/* Logout modal moved to unified header */}
-
-    {/* Delete Confirm Modal */}
     <Modal transparent animationType="fade" visible={deleteConfirmVisible} onRequestClose={()=>!isDeleting && setDeleteConfirmVisible(false)}>
       <View style={styles.modalOverlayCenter}>
         <View style={styles.fbModalCard}>
@@ -2114,5 +2117,7 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
 });
+
+/* END stray duplicated block */
 
 export default Alerts;
