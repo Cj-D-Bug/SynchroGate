@@ -30,22 +30,46 @@ if (Platform.OS !== 'web') {
 }
 
 /**
- * Generate and save FCM push token for a user
- * Called on registration and login to ensure tokens are always up to date
+ * Generate and save FCM push token for a user.
+ *
+ * CRITICAL RULES:
+ * - Only called for FULLY LOGGED-IN users (has uid AND valid role).
+ * - MUST NOT be called for logged-out users or before role selection.
+ * - When user is logged out, AuthContext.logout() clears fcmToken from Firestore.
+ *
+ * This extra guard ensures:
+ * - Fresh installs (no user logged in) never save any FCM token.
+ * - Logged-out users never keep a valid FCM token in Firestore.
+ *
  * @param {Object} user - User object with uid, role, parentId, studentId
  * @returns {Promise<string|null>} FCM token or null if not available
  */
 export const generateAndSavePushToken = async (user) => {
-  console.log('🔔 generateAndSavePushToken called for user:', {
+  const safeSummary = {
     hasUser: !!user,
     hasUid: !!user?.uid,
     role: user?.role,
     parentId: user?.parentId,
-    studentId: user?.studentId
-  });
+    studentId: user?.studentId,
+  };
 
+  console.log('🔔 generateAndSavePushToken called for user:', safeSummary);
+
+  // HARD GUARD: Never generate/save a token without a real logged-in user
   if (!user || !user.uid) {
-    console.log('⚠️ Cannot generate push token - missing user or uid');
+    console.log('⚠️ Cannot generate push token - missing user or uid (user not logged in)');
+    return null;
+  }
+
+  const roleLower = String(user.role || '').toLowerCase();
+  const allowedRoles = ['student', 'parent', 'admin', 'developer'];
+
+  // HARD GUARD: Require a valid role. If role is missing or invalid, do NOT save token.
+  if (!roleLower || !allowedRoles.includes(roleLower)) {
+    console.log('⏭️ Skipping FCM token generation - invalid or missing role for user:', {
+      uid: user.uid,
+      role: user.role,
+    });
     return null;
   }
 
@@ -203,7 +227,6 @@ export const generateAndSavePushToken = async (user) => {
     // Save token to Firestore
     console.log('🔍 Preparing to save FCM token to Firestore...');
     try {
-      const roleLower = String(user?.role || '').toLowerCase();
       const isParent = roleLower === 'parent';
       const isStudent = roleLower === 'student';
       const isDeveloper = roleLower === 'developer';
@@ -240,10 +263,14 @@ export const generateAndSavePushToken = async (user) => {
       const userRef = doc(db, 'users', targetDocId);
       
       // Combine all data in one operation for better reliability
+      const nowIso = new Date().toISOString();
       const tokenData = {
         fcmToken: fcmToken,
         pushTokenType: 'fcm',
-        pushTokenUpdatedAt: new Date().toISOString(),
+        pushTokenUpdatedAt: nowIso,
+        // CRITICAL: lastLoginAt proves this user is actively logged in.
+        // Backend isUserLoggedIn() checks this and also enforces recency.
+        lastLoginAt: nowIso,
         uid: user.uid,
         parentId: canonicalParentId || user.parentId || null,
         studentId: studentId || user.studentId || null,
