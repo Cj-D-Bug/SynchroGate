@@ -35,7 +35,7 @@ import { db } from '../../utils/firebaseConfig';
 import { updateLinkFcmTokens } from '../../utils/linkFcmTokenManager';
 import { generateAndSavePushToken } from '../../utils/pushTokenGenerator';
 import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
-import { sendAlertPushNotification } from '../../utils/pushNotificationHelper';
+// Removed: sendAlertPushNotification import - backend handles all push notifications automatically
 const AboutLogo = require('../../assets/logo.png');
 
 const { width, height } = Dimensions.get('window');
@@ -641,7 +641,9 @@ const Alerts = () => {
           await setDoc(parentAlertsRef, { items: updated }, { merge: true });
           console.log('✅ STUDENT ACCEPT: Successfully wrote link_response to parent_alerts:', parentDocId);
           // Send push notification via backend API (works even when app is closed)
-          sendAlertPushNotification({ ...acceptedNotification, parentId: parentDocId }, parentDocId, 'parent').catch(err => 
+          // Removed: sendAlertPushNotification - backend handles all push notifications automatically
+          // Backend listener will detect the alert change and send notification to the correct parent
+          Promise.resolve().catch(err => 
             console.warn('Push notification failed (non-blocking):', err)
           );
         } else {
@@ -782,7 +784,8 @@ const Alerts = () => {
             await setDoc(parentAlertsRef, { items: updated }, { merge: true });
             console.log('🔴 STUDENT DECLINE: Successfully wrote link_response to parent_alerts:', parentDocId);
             // Send push notification via backend API (works even when app is closed)
-            sendAlertPushNotification({ ...declinedNotification, parentId: parentDocId }, parentDocId, 'parent').catch(err => 
+            // Removed: sendAlertPushNotification - backend handles all push notifications automatically
+            Promise.resolve().catch(err => 
               console.warn('Push notification failed (non-blocking):', err)
             );
           } else {

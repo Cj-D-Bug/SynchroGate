@@ -32,7 +32,7 @@ import {
 import { onSnapshot } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
 import { getNetworkErrorMessage } from '../../utils/networkErrorHandler';
-import { sendAlertPushNotification } from '../../utils/pushNotificationHelper';
+// Removed: sendAlertPushNotification import - backend handles all push notifications automatically
 import { updateLinkFcmTokens, getLinkFcmTokens } from '../../utils/linkFcmTokenManager';
 import { generateAndSavePushToken } from '../../utils/pushTokenGenerator';
 const AboutLogo = require('../../assets/logo.png');
@@ -824,7 +824,8 @@ const Alerts = () => {
           await setDoc(studentAlertsRef, { items: updated }, { merge: true });
           console.log('🔴 PARENT DECLINE: Successfully wrote link_response to student_alerts:', studentDocId);
           // Send push notification via backend API (works even when app is closed)
-          sendAlertPushNotification(declinedNotification, studentDocId, 'student').catch(err => 
+          // Removed: sendAlertPushNotification - backend handles all push notifications automatically
+          Promise.resolve().catch(err => 
             console.warn('Push notification failed (non-blocking):', err)
           );
         } else {
@@ -929,7 +930,8 @@ const Alerts = () => {
         await setDoc(studentAlertsRef, { items: updated }, { merge: true });
         console.log('✅ PARENT SCHEDULE PERMISSION ACCEPT: Successfully wrote response to student_alerts');
         // Send push notification via backend API (works even when app is closed)
-        sendAlertPushNotification(acceptedNotification, alert.studentId, 'student').catch(err => 
+        // Removed: sendAlertPushNotification - backend handles all push notifications automatically
+        Promise.resolve().catch(err => 
           console.warn('Push notification failed (non-blocking):', err)
         );
       }
@@ -1007,7 +1009,8 @@ const Alerts = () => {
         await setDoc(studentAlertsRef, { items: updated }, { merge: true });
         console.log('🔴 PARENT SCHEDULE PERMISSION DECLINE: Successfully wrote response to student_alerts');
         // Send push notification via backend API (works even when app is closed)
-        sendAlertPushNotification(declinedNotification, alert.studentId, 'student').catch(err => 
+        // Removed: sendAlertPushNotification - backend handles all push notifications automatically
+        Promise.resolve().catch(err => 
           console.warn('Push notification failed (non-blocking):', err)
         );
       }

@@ -34,7 +34,7 @@ import { db } from '../../utils/firebaseConfig';
 import { deleteConversationOnUnlink, deleteAllStudentToStudentConversations } from '../../utils/conversationUtils';
 import { getNetworkErrorMessage } from '../../utils/networkErrorHandler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { sendAlertPushNotification } from '../../utils/pushNotificationHelper';
+// Removed: sendAlertPushNotification import - backend handles all push notifications automatically
 
 const { width, height } = Dimensions.get('window');
 const LIST_MAX_HEIGHT = Math.max(120, height - 310);
@@ -794,7 +794,8 @@ function LinkStudents() {
           await setDoc(doc(db, 'student_alerts', studentCanonicalId), { items: [newAlert] }, { merge: true });
         }
         // Send push notification via backend API (works even when app is closed)
-        sendAlertPushNotification(newAlert, studentCanonicalId, 'student').catch(err => 
+        // Removed: sendAlertPushNotification - backend handles all push notifications automatically
+        Promise.resolve().catch(err => 
           console.warn('Push notification failed (non-blocking):', err)
         );
       }

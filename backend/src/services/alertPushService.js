@@ -968,10 +968,37 @@ const initializeAdminAlertsListener = () => {
         }
       }
       
-      // Send to all logged-in admins - sendPushForAlert will do additional validation
+      // CRITICAL: Send to each admin individually with full validation
+      // sendPushForAlert will verify:
+      // 1. Admin user is logged in (within 30 days)
+      // 2. Alert is actually an admin alert (no parentId/studentId)
+      // 3. Alert type is admin-specific (not parent/student alert type)
       for (const alert of newAlerts) {
+        // Double-check alert is admin-only before sending to any admin
+        const alertType = alert.type || alert.alertType || '';
+        const hasParentId = !!(alert.parentId || alert.parent_id);
+        const hasStudentId = !!(alert.studentId || alert.student_id);
+        
+        if (hasParentId || hasStudentId) {
+          console.log(`⏭️ [ADMIN LISTENER] CRITICAL: Skipping alert ${alert.id || alert.alertId} - has parentId (${hasParentId}) or studentId (${hasStudentId}) - this should NEVER be sent to admins`);
+          continue; // Skip this alert entirely - don't send to any admin
+        }
+        
+        const parentStudentAlertTypes = [
+          'schedule_permission_request', 'schedule_permission_response',
+          'attendance_scan', 'link_request', 'link_response',
+          'schedule_added', 'schedule_updated', 'schedule_deleted', 'schedule_current'
+        ];
+        const isParentStudentType = parentStudentAlertTypes.some(t => alertType.toLowerCase().includes(t.toLowerCase()));
+        
+        if (isParentStudentType) {
+          console.log(`⏭️ [ADMIN LISTENER] CRITICAL: Skipping alert ${alert.id || alert.alertId} - type "${alertType}" is a parent/student alert type - this should NEVER be sent to admins`);
+          continue; // Skip this alert entirely - don't send to any admin
+        }
+        
+        // Only send to verified logged-in admins
         for (const adminUserId of adminUserIds) {
-          // sendPushForAlert will verify the alert is actually an admin alert
+          // sendPushForAlert will do additional validation, but we've already filtered here
           await sendPushForAlert(alert, 'admin', adminUserId);
         }
       }

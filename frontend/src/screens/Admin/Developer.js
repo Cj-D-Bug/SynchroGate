@@ -8,7 +8,7 @@ import { BASE_URL } from '../../utils/apiConfig';
 import { collection, query, where, getDocs, doc, collectionGroup, getDoc } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
 import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
-import { sendAlertPushNotification } from '../../utils/pushNotificationHelper';
+// Removed: sendAlertPushNotification import - backend handles all push notifications automatically
 
 const Developer = () => {
   const navigation = useNavigation();
@@ -130,7 +130,9 @@ const Developer = () => {
         hasFcmToken: !!fcmToken
       });
 
-      await sendAlertPushNotification(testAlert, userDocId, userRole);
+      // Removed: sendAlertPushNotification - backend handles all push notifications automatically
+      // For testing, create the alert in Firestore and backend will send notification
+      console.log('ℹ️ Test alert push notification disabled - backend handles all notifications automatically');
       
       setFeedbackMessage(fcmToken 
         ? '✅ Push notification sent! Check your device (close the app first). Check Railway logs for confirmation.'

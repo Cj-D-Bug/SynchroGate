@@ -35,7 +35,7 @@ import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/ne
 import { deleteConversationOnUnlink, deleteAllStudentToStudentConversations } from '../../utils/conversationUtils';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import avatarEventEmitter from '../../utils/avatarEventEmitter';
-import { sendAlertPushNotification } from '../../utils/pushNotificationHelper';
+// Removed: sendAlertPushNotification import - backend handles all push notifications automatically
 
 const { width, height } = Dimensions.get('window');
 const LIST_MAX_HEIGHT = Math.max(120, height - 310);
@@ -1288,7 +1288,8 @@ function LinkStudents() {
           items: arrayUnion(newAlert),
         });
         // Send push notification via backend API (works even when app is closed)
-        sendAlertPushNotification(newAlert, parentCanonicalId, 'parent').catch(err => 
+        // Removed: sendAlertPushNotification - backend handles all push notifications automatically
+        Promise.resolve().catch(err => 
           console.warn('Push notification failed (non-blocking):', err)
         );
       } catch (_) {
