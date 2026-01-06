@@ -5,7 +5,7 @@ const db = admin.firestore();
 
 // ===== REGISTER =====
 exports.register = async (req, res) => {
-  const { uid, fullName, email, role, linkedStudents, parentId, studentId } = req.body;
+  const { uid, fullName, email, role, linkedStudents, parentId, studentId, fcmToken } = req.body;
 
   try {
     if (!uid || !fullName || !email || !role) {
@@ -30,7 +30,8 @@ exports.register = async (req, res) => {
       return res.status(400).json({ message: "User already exists" });
     }
 
-    await userRef.set({
+    const now = new Date().toISOString();
+    const userData = {
       uid,
       fullName,
       email,
@@ -40,7 +41,19 @@ exports.register = async (req, res) => {
       studentId: role.toLowerCase() === "student" ? studentId : null,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    };
+
+    // Add FCM token if provided
+    if (fcmToken && typeof fcmToken === 'string' && fcmToken.trim().length > 0) {
+      userData.fcmToken = fcmToken.trim();
+      userData.pushTokenType = 'fcm';
+      userData.pushTokenUpdatedAt = now;
+      // CRITICAL: Set lastLoginAt on registration to mark user as logged in
+      userData.lastLoginAt = now;
+      console.log(`✅ FCM token saved during registration for ${role} ${documentId}`);
+    }
+
+    await userRef.set(userData);
 
     // If role is student, add to students collection
     if (role.toLowerCase() === "student") {
@@ -63,7 +76,7 @@ exports.register = async (req, res) => {
 // Since Firebase client handles login, backend verifies ID token
 exports.login = async (req, res) => {
   try {
-    const { idToken } = req.body;
+    const { idToken, fcmToken } = req.body;
     if (!idToken) return res.status(400).json({ message: "ID Token required" });
 
     const decodedToken = await admin.auth().verifyIdToken(idToken);
@@ -78,10 +91,34 @@ exports.login = async (req, res) => {
 
     const userDoc = querySnapshot.docs[0];
     const userData = userDoc.data();
+    const documentId = userDoc.id;
+
+    // Update FCM token and lastLoginAt if provided
+    const now = new Date().toISOString();
+    const updateData = {
+      lastLoginAt: now,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    // Update FCM token if provided
+    if (fcmToken && typeof fcmToken === 'string' && fcmToken.trim().length > 0) {
+      updateData.fcmToken = fcmToken.trim();
+      updateData.pushTokenType = 'fcm';
+      updateData.pushTokenUpdatedAt = now;
+      console.log(`✅ FCM token updated during login for user ${documentId}`);
+    }
+
+    // Update the user document with login timestamp and FCM token
+    const userDocRef = db.collection("users").doc(documentId);
+    await userDocRef.update(updateData);
+
+    // Get updated user data
+    const updatedUserDoc = await userDocRef.get();
+    const updatedUserData = updatedUserDoc.data();
 
     res.json({
       message: "Login successful",
-      user: userData,
+      user: updatedUserData,
     });
   } catch (err) {
     console.error("Login Error:", err);
