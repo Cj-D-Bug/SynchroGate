@@ -21,6 +21,7 @@ import { doc, onSnapshot, getDoc, setDoc, collection, query, where, getDocs } fr
 import { db } from '../../utils/firebaseConfig';
 import { wp, hp, fontSizes, responsiveStyles, getResponsiveDimensions } from '../../utils/responsive';
 import avatarEventEmitter from '../../utils/avatarEventEmitter';
+import { cacheDashboardData, getCachedDashboardData } from '../../offline/storage';
 
 const { width, height } = Dimensions.get('window');
 const statusBarHeight = StatusBar.currentHeight || 0;
@@ -95,27 +96,39 @@ const StudentDashboard = () => {
     const loadQrStatus = async () => {
       try {
         if (!user?.studentId) { setHasQrCode(false); return; }
-        // Use cached value first for instant UI
+        // Use cached value first for instant UI (works offline)
         try {
           const cached = await AsyncStorage.getItem(`qrCodeUrl_${user.studentId}`);
-          if (cached) setHasQrCode(true);
+          if (cached) {
+            setHasQrCode(true);
+            // If offline, use cached value and return early
+            if (!isConnected) {
+              try { setQrLoaded(true); } catch {}
+              return;
+            }
+          }
         } catch {}
-        const qrRef = doc(db, 'student_QRcodes', String(user.studentId));
-        const qrSnap = await getDoc(qrRef);
-        const data = qrSnap.exists() ? qrSnap.data() : {};
-        const has = Boolean(data?.qrCodeUrl);
-        setHasQrCode(has);
-        try {
-          if (has) await AsyncStorage.setItem(`qrCodeUrl_${user.studentId}`, String(data.qrCodeUrl));
-          else await AsyncStorage.removeItem(`qrCodeUrl_${user.studentId}`);
-        } catch {}
+        
+        // Only fetch from Firestore if online
+        if (isConnected) {
+          const qrRef = doc(db, 'student_QRcodes', String(user.studentId));
+          const qrSnap = await getDoc(qrRef);
+          const data = qrSnap.exists() ? qrSnap.data() : {};
+          const has = Boolean(data?.qrCodeUrl);
+          setHasQrCode(has);
+          try {
+            if (has) await AsyncStorage.setItem(`qrCodeUrl_${user.studentId}`, String(data.qrCodeUrl));
+            else await AsyncStorage.removeItem(`qrCodeUrl_${user.studentId}`);
+          } catch {}
+        }
       } catch (e) {
         // Keep whatever cached state we might have set
+        console.log('Error loading QR status:', e);
       }
       try { setQrLoaded(true); } catch {}
     };
     if (isFocused) loadQrStatus();
-  }, [isFocused, user?.studentId]);
+  }, [isFocused, user?.studentId, isConnected]);
 
   // Show loading on navigate/focus until initial profile and QR checks complete
   useEffect(() => {
@@ -161,96 +174,140 @@ const StudentDashboard = () => {
       return;
     }
     
-    // Get student identifiers (both UID and student ID number)
-    const getStudentIdentifiers = () => {
-      const identifiers = [];
-      const uid = String(user?.uid || '').trim();
-      const studentNumber = String(user?.studentId || user?.studentID || '').trim();
-      if (uid) identifiers.push({ field: 'studentId', value: uid });
-      if (studentNumber) identifiers.push({ field: 'studentIdNumber', value: studentNumber });
-      return identifiers;
-    };
-    
-    const identifiers = getStudentIdentifiers();
-    if (identifiers.length === 0) {
-      setLinkedParents([]);
-      setParentsLoading(false);
-      return;
-    }
-    
-    setParentsLoading(true);
-    
-    // Create queries for each identifier
-    const queries = identifiers.map(({ field, value }) =>
-      query(
-        collection(db, 'parent_student_links'),
-        where(field, '==', value),
-        where('status', '==', 'active')
-      )
-    );
-    
-    // Store results from each listener
-    const resultsMap = new Map();
-    const initializedSet = new Set();
-    
-    // Helper to combine all results and update state
-    const updateCombinedResults = () => {
-      const allParents = new Map();
-      resultsMap.forEach((queryResults) => {
-        queryResults.forEach((parent, parentId) => {
-          if (!allParents.has(parentId)) {
-            allParents.set(parentId, parent);
-          }
-        });
-      });
-      setLinkedParents(Array.from(allParents.values()));
+    const loadLinkedParents = async () => {
+      setParentsLoading(true);
       
-      // Set loading to false after all queries have initialized
-      if (initializedSet.size >= queries.length) {
-        setParentsLoading(false);
+      // Try to load from cache first (works offline)
+      try {
+        const cachedData = await getCachedDashboardData(user.studentId || user.uid, 'student');
+        if (cachedData?.linkedParents) {
+          setLinkedParents(cachedData.linkedParents);
+          // If offline, use cached data and return early
+          if (!isConnected) {
+            setParentsLoading(false);
+            return;
+          }
+        }
+      } catch (error) {
+        console.log('Error loading cached linked parents:', error);
       }
-    };
     
-    // Set up real-time listeners for each query
-    const unsubscribes = queries.map((qRef, index) => {
-      return onSnapshot(qRef, (linksSnapshot) => {
-        try {
-          // Store results for this query
-          const queryResults = new Map();
-          linksSnapshot.forEach((doc) => {
-            const data = doc.data();
-            const parentId = String(data.parentId || '').trim();
-            if (parentId) {
-              queryResults.set(parentId, {
-                id: doc.id,
-                parentId: data.parentId,
-                parentName: data.parentName || 'Parent',
-                relationship: data.relationship || '',
-              });
+      // Only fetch from Firestore if online
+      if (!isConnected) {
+        setParentsLoading(false);
+        return;
+      }
+    
+      // Get student identifiers (both UID and student ID number)
+      const getStudentIdentifiers = () => {
+        const identifiers = [];
+        const uid = String(user?.uid || '').trim();
+        const studentNumber = String(user?.studentId || user?.studentID || '').trim();
+        if (uid) identifiers.push({ field: 'studentId', value: uid });
+        if (studentNumber) identifiers.push({ field: 'studentIdNumber', value: studentNumber });
+        return identifiers;
+      };
+      
+      const identifiers = getStudentIdentifiers();
+      if (identifiers.length === 0) {
+        setLinkedParents([]);
+        setParentsLoading(false);
+        return;
+      }
+      
+      // Create queries for each identifier
+      const queries = identifiers.map(({ field, value }) =>
+        query(
+          collection(db, 'parent_student_links'),
+          where(field, '==', value),
+          where('status', '==', 'active')
+        )
+      );
+      
+      // Store results from each listener
+      const resultsMap = new Map();
+      const initializedSet = new Set();
+      
+      // Helper to combine all results and update state
+      const updateCombinedResults = () => {
+        const allParents = new Map();
+        resultsMap.forEach((queryResults) => {
+          queryResults.forEach((parent, parentId) => {
+            if (!allParents.has(parentId)) {
+              allParents.set(parentId, parent);
             }
           });
-          
-          resultsMap.set(index, queryResults);
-          initializedSet.add(index);
-          
-          // Combine all results and update state
-          updateCombinedResults();
+        });
+        const parentsArray = Array.from(allParents.values());
+        setLinkedParents(parentsArray);
+        
+        // Cache the data for offline access
+        try {
+          cacheDashboardData(user.studentId || user.uid, 'student', {
+            linkedParents: parentsArray,
+          });
         } catch (error) {
-          console.log('Error processing linked parents:', error);
+          console.log('Error caching linked parents:', error);
+        }
+        
+        // Set loading to false after all queries have initialized
+        if (initializedSet.size >= queries.length) {
           setParentsLoading(false);
         }
-      }, (error) => {
-        console.log('Error loading linked parents:', error);
-        setParentsLoading(false);
+      };
+      
+      // Set up real-time listeners for each query
+      const unsubscribes = queries.map((qRef, index) => {
+        return onSnapshot(qRef, (linksSnapshot) => {
+          try {
+            // Store results for this query
+            const queryResults = new Map();
+            linksSnapshot.forEach((doc) => {
+              const data = doc.data();
+              const parentId = String(data.parentId || '').trim();
+              if (parentId) {
+                queryResults.set(parentId, {
+                  id: doc.id,
+                  parentId: data.parentId,
+                  parentName: data.parentName || 'Parent',
+                  relationship: data.relationship || '',
+                });
+              }
+            });
+            
+            resultsMap.set(index, queryResults);
+            initializedSet.add(index);
+            
+            // Combine all results and update state
+            updateCombinedResults();
+          } catch (error) {
+            console.log('Error processing linked parents:', error);
+            setParentsLoading(false);
+          }
+        }, (error) => {
+          console.log('Error loading linked parents:', error);
+          setParentsLoading(false);
+        });
       });
-    });
-    
-    return () => {
-      unsubscribes.forEach((unsub) => {
-        try { unsub(); } catch {}
-      });
+      
+      return () => {
+        unsubscribes.forEach((unsub) => {
+          try { unsub(); } catch {}
+        });
+      };
     };
-  }, [user?.uid, user?.studentId]);
+    
+    const cleanup = loadLinkedParents();
+    return () => {
+      if (cleanup && typeof cleanup.then === 'function') {
+        cleanup.then((unsub) => {
+          if (unsub && typeof unsub === 'function') unsub();
+        });
+      } else if (cleanup && typeof cleanup === 'function') {
+        cleanup();
+      }
+    };
+  }, [user?.uid, user?.studentId, isConnected]);
 
   // Load today's schedule count
   useEffect(() => {
@@ -262,6 +319,28 @@ const StudentDashboard = () => {
       }
       
       setScheduleLoading(true);
+      
+      // Try to load from cache first (works offline)
+      try {
+        const cachedData = await getCachedDashboardData(user.studentId, 'student');
+        if (cachedData?.todayScheduleCount !== undefined) {
+          setTodayScheduleCount(cachedData.todayScheduleCount);
+          // If offline, use cached data and return early
+          if (!isConnected) {
+            setScheduleLoading(false);
+            return;
+          }
+        }
+      } catch (error) {
+        console.log('Error loading cached schedule count:', error);
+      }
+      
+      // Only fetch from Firestore if online
+      if (!isConnected) {
+        setScheduleLoading(false);
+        return;
+      }
+      
       try {
         const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
         const schedRef = doc(db, 'schedules', String(user.studentId));
@@ -281,6 +360,17 @@ const StudentDashboard = () => {
         }
         
         setTodayScheduleCount(count);
+        
+        // Cache the data for offline access
+        try {
+          const cachedData = await getCachedDashboardData(user.studentId, 'student') || {};
+          await cacheDashboardData(user.studentId, 'student', {
+            ...cachedData,
+            todayScheduleCount: count,
+          });
+        } catch (error) {
+          console.log('Error caching schedule count:', error);
+        }
       } catch (error) {
         console.log('Error loading today\'s schedule:', error);
         setTodayScheduleCount(0);
@@ -290,7 +380,7 @@ const StudentDashboard = () => {
     };
     
     if (isFocused) loadTodayScheduleCount();
-  }, [isFocused, user?.studentId]);
+  }, [isFocused, user?.studentId, isConnected]);
 
   // Load ongoing classes
   useEffect(() => {
@@ -301,6 +391,28 @@ const StudentDashboard = () => {
         return;
       }
       setOngoingLoading(true);
+      
+      // Try to load from cache first (works offline)
+      try {
+        const cachedData = await getCachedDashboardData(user.studentId, 'student');
+        if (cachedData?.ongoingClass !== undefined) {
+          setOngoingClass(cachedData.ongoingClass);
+          // If offline, use cached data and return early
+          if (!isConnected) {
+            setOngoingLoading(false);
+            return;
+          }
+        }
+      } catch (error) {
+        console.log('Error loading cached ongoing class:', error);
+      }
+      
+      // Only fetch from Firestore if online
+      if (!isConnected) {
+        setOngoingLoading(false);
+        return;
+      }
+      
       try {
         const isNowWithin = (timeRange) => {
           try {
@@ -378,6 +490,17 @@ const StudentDashboard = () => {
           }
         }
         setOngoingClass(foundClass);
+        
+        // Cache the data for offline access
+        try {
+          const cachedData = await getCachedDashboardData(user.studentId, 'student') || {};
+          await cacheDashboardData(user.studentId, 'student', {
+            ...cachedData,
+            ongoingClass: foundClass,
+          });
+        } catch (error) {
+          console.log('Error caching ongoing class:', error);
+        }
       } catch {
         setOngoingClass(null);
       } finally {
@@ -387,11 +510,13 @@ const StudentDashboard = () => {
 
     if (isFocused) {
       loadOngoingClasses();
-      // Refresh every minute to check for ongoing classes
-      const interval = setInterval(loadOngoingClasses, 60000);
-      return () => clearInterval(interval);
+      // Refresh every minute to check for ongoing classes (only when online)
+      if (isConnected) {
+        const interval = setInterval(loadOngoingClasses, 60000);
+        return () => clearInterval(interval);
+      }
     }
-  }, [isFocused, user?.studentId]);
+  }, [isFocused, user?.studentId, isConnected]);
 
   // Handle orientation changes
   useEffect(() => {
@@ -620,25 +745,28 @@ const StudentDashboard = () => {
         visible={qrRequestVisible}
         onRequestClose={() => setQrRequestVisible(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={[styles.modalIconWrap, { backgroundColor: '#DBEAFE' }]}>
-              <Ionicons name="qr-code-outline" size={28} color="#2563EB" />
+        <View style={styles.modalOverlayCenter}>
+          <View style={styles.fbModalCard}>
+            <View style={styles.fbModalContent}>
+              <Text style={styles.fbModalTitle}>Request QR Code</Text>
+              <Text style={styles.fbModalMessage}>
+                Send a request to the admin to generate your QR code?
+              </Text>
             </View>
-            <Text style={styles.modalTitle}>Request QR Code</Text>
-            <Text style={styles.modalText}>
-              {`Send a request to the admin to generate your QR code?`}
-            </Text>
-            <View style={styles.modalActions}>
+            <View style={styles.fbModalButtonContainer}>
               <TouchableOpacity
-                style={[styles.modalButton, qrRequestSending && styles.disabledButton]}
+                style={[styles.fbModalCancelButton, qrRequestSending && styles.fbModalButtonDisabled]}
                 disabled={qrRequestSending}
                 onPress={() => setQrRequestVisible(false)}
               >
-                <Text style={[styles.modalButtonText, qrRequestSending && styles.disabledButtonText]}>No</Text>
+                <Text style={styles.fbModalCancelText}>No</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.modalButton, { backgroundColor: '#2563EB' }, qrRequestSending && styles.disabledButton]}
+                style={[
+                  styles.fbModalConfirmButton,
+                  { backgroundColor: '#2563EB' },
+                  qrRequestSending && styles.fbModalButtonDisabled
+                ]}
                 disabled={qrRequestSending}
                 onPress={async () => {
                   if (!user?.studentId) { setQrRequestVisible(false); return; }
@@ -690,7 +818,7 @@ const StudentDashboard = () => {
                   setTimeout(() => setFeedbackVisible(false), 1500);
                 }}
               >
-                <Text style={[styles.modalButtonText, { color: '#fff', fontWeight: '700' }]}>
+                <Text style={styles.fbModalConfirmText}>
                   {qrRequestSending ? 'Sending...' : 'Yes'}
                 </Text>
               </TouchableOpacity>
@@ -706,13 +834,14 @@ const StudentDashboard = () => {
         visible={feedbackVisible}
         onRequestClose={() => setFeedbackVisible(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={[styles.modalIconWrap, { backgroundColor: feedbackSuccess ? '#DCFCE7' : '#FEE2E2' }]}>
-              <Ionicons name={feedbackSuccess ? 'checkmark-circle-outline' : 'alert-circle-outline'} size={28} color={feedbackSuccess ? '#16A34A' : '#b91c1c'} />
+        <View style={styles.modalOverlayCenter}>
+          <View style={styles.fbModalCard}>
+            <View style={styles.fbModalContent}>
+              <Text style={[styles.fbModalTitle, { color: feedbackSuccess ? '#10B981' : '#DC2626' }]}>
+                {feedbackSuccess ? 'Success' : 'Notice'}
+              </Text>
+              <Text style={styles.fbModalMessage}>{feedbackMessage}</Text>
             </View>
-            <Text style={styles.modalTitle}>{feedbackSuccess ? 'Success' : 'Notice'}</Text>
-            <Text style={styles.modalText}>{feedbackMessage}</Text>
           </View>
         </View>
       </Modal>
@@ -783,19 +912,79 @@ const styles = StyleSheet.create({
   navItemActive: { alignItems: 'center', flex: 1 },
   navText: { fontSize: fontSizes.xs, marginTop: hp(0.2), color: '#111827' },
   navTextActive: { fontSize: fontSizes.xs, color: '#2563eb', marginTop: hp(0.2), fontWeight: '600' },
-  // Modal styles
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  modalCard: { backgroundColor: '#fff', borderRadius: 16, padding: 24, width: '80%', alignItems: 'center' },
-  modalIconWrap: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
-  modalTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 8 },
-  modalText: { fontSize: 16, color: '#6B7280', textAlign: 'center', marginBottom: 24 },
-  modalActions: { flexDirection: 'row', gap: 12 },
-  modalButton: { flex: 1, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center' },
-  modalButtonText: { fontSize: 16, fontWeight: '600', color: '#6B7280' },
-  modalButtonDanger: { backgroundColor: '#FEE2E2' },
-  modalButtonDangerText: { color: '#b91c1c' },
-  disabledButton: { opacity: 0.5 },
-  disabledButtonText: { opacity: 0.5 },
+  // Facebook-style modal styles (matching alerts.js)
+  modalOverlayCenter: { 
+    flex: 1, 
+    backgroundColor: 'rgba(0,0,0,0.5)', 
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20
+  },
+  fbModalCard: {
+    width: '85%',
+    maxWidth: 400,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 8,
+    elevation: 5,
+    minHeight: 120,
+    justifyContent: 'space-between',
+  },
+  fbModalContent: {
+    flex: 1,
+  },
+  fbModalTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#050505',
+    marginBottom: 12,
+    textAlign: 'left',
+  },
+  fbModalMessage: {
+    fontSize: 15,
+    color: '#65676B',
+    textAlign: 'left',
+    lineHeight: 20,
+  },
+  fbModalButtonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 20,
+    gap: 8,
+  },
+  fbModalCancelButton: {
+    backgroundColor: '#E4E6EB',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fbModalCancelText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#050505',
+  },
+  fbModalConfirmButton: {
+    backgroundColor: '#1877F2',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fbModalConfirmText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  fbModalButtonDisabled: {
+    opacity: 0.5,
+  },
   // Empty state styles (mirrored from Parent Dashboard)
   emptyStateContainer: { 
     marginTop: 8, // Same gap as between cards and QR container (section marginBottom 8 + qrContainer marginTop 4 = 12, so qrContainer marginBottom 4 + this marginTop 8 = 12)

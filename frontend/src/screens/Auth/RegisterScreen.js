@@ -377,6 +377,8 @@ const RegisterScreen = () => {
   const [successModalVisible, setSuccessModalVisible] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const successTimerRef = useRef(null);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [termsModalVisible, setTermsModalVisible] = useState(false);
 
   // Validation states
   const [errors, setErrors] = useState({});
@@ -675,6 +677,9 @@ const RegisterScreen = () => {
         if (!value) error = 'Please confirm your password';
         else if (value !== password) error = 'Passwords do not match';
         break;
+      case 'acceptedTerms':
+        if (!value) error = 'You must accept the Terms and Policies to register';
+        break;
       default:
         break;
     }
@@ -728,6 +733,7 @@ const RegisterScreen = () => {
       'email',
       'password',
       'confirmPassword',
+      'acceptedTerms',
     ];
 
     if (role !== 'parent') {
@@ -751,6 +757,7 @@ const RegisterScreen = () => {
         case 'email': return email;
         case 'password': return password;
         case 'confirmPassword': return confirmPassword;
+        case 'acceptedTerms': return acceptedTerms;
         default: return undefined;
       }
     };
@@ -837,6 +844,17 @@ const RegisterScreen = () => {
     // Disallow registration for admin or unknown roles
     if (!isAllowedRegistrationRole(role)) {
       setErrorMessage('Registration is only available for Student or Parent accounts.');
+      setErrorModalVisible(true);
+      try { if (errorTimerRef.current) { clearTimeout(errorTimerRef.current); } } catch {}
+      errorTimerRef.current = setTimeout(() => {
+        setErrorModalVisible(false);
+      }, 1500);
+      return;
+    }
+    // Check if terms are accepted
+    if (!acceptedTerms) {
+      handleFieldBlur('acceptedTerms', false);
+      setErrorMessage('You must accept the Terms and Policies to register.');
       setErrorModalVisible(true);
       try { if (errorTimerRef.current) { clearTimeout(errorTimerRef.current); } } catch {}
       errorTimerRef.current = setTimeout(() => {
@@ -1047,31 +1065,35 @@ const RegisterScreen = () => {
           {touched.gender && errors.gender && <Text style={styles.errorText}>{errors.gender}</Text>}
         </View>
 
-        <InputField
-          label="Age"
-          value={age}
-          editable={false}
-          placeholder="Auto"
-          style={[styles.fixedAge, { textAlign: 'center', backgroundColor: '#F3F4F6' }]}
-          error={touched.age ? errors.age : ''}
-        />
-        <TouchableOpacity 
-          style={styles.rowInput} 
-          onPress={openCalendarModal} 
-          activeOpacity={0.8}
-        >
-          <View pointerEvents="none">
-        <InputField
-          label="Birthday"
-              value={birthday instanceof Date ? birthday.toLocaleDateString() : (typeof birthday === 'string' ? birthday : '')}
-              editable={false}
-              placeholder="Select Birthdate"
-              style={[styles.fixedBirthday, { textAlign: 'center', backgroundColor: '#F0F9FF' }]}
-              error={touched.birthday ? errors.birthday : ''}
-              onBlur={() => handleFieldBlur('birthday')}
-            />
-          </View>
-        </TouchableOpacity>
+        <View style={styles.rowInput}>
+          <InputField
+            label="Age"
+            value={age}
+            editable={false}
+            placeholder="Auto"
+            style={{ textAlign: 'center', backgroundColor: '#F3F4F6', width: '100%' }}
+            error={touched.age ? errors.age : ''}
+          />
+        </View>
+        <View style={styles.rowInput}>
+          <TouchableOpacity 
+            onPress={openCalendarModal} 
+            activeOpacity={0.8}
+            style={{ width: '100%' }}
+          >
+            <View pointerEvents="none" style={{ width: '100%' }}>
+              <InputField
+                label="Birthday"
+                value={birthday instanceof Date ? birthday.toLocaleDateString() : (typeof birthday === 'string' ? birthday : '')}
+                editable={false}
+                placeholder="Select Birthdate"
+                style={{ textAlign: 'center', backgroundColor: '#F0F9FF', width: '100%' }}
+                error={touched.birthday ? errors.birthday : ''}
+                onBlur={() => handleFieldBlur('birthday')}
+              />
+            </View>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Contact Number */}
@@ -1250,11 +1272,32 @@ const RegisterScreen = () => {
       )}
 
       {/* Already Registered Link */}
-      <View style={[styles.signInContainer, { marginBottom: 20 }]}>
+      <View style={[styles.signInContainer, { marginBottom: 12 }]}>
         <Text style={styles.signInText}>Already registered? </Text>
         <TouchableOpacity onPress={() => navigation.navigate('Login', { role })}>
           <Text style={styles.signInLink}>Sign in</Text>
         </TouchableOpacity>
+      </View>
+
+      {/* Terms and Policies Checkbox */}
+      <View style={styles.termsContainer}>
+        <View style={styles.termsContentContainer}>
+          <TouchableOpacity
+            style={styles.checkboxContainer}
+            onPress={() => setAcceptedTerms(!acceptedTerms)}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.checkbox, acceptedTerms && styles.checkboxChecked]}>
+              {acceptedTerms && <Ionicons name="checkmark" size={16} color="#FFFFFF" />}
+            </View>
+          </TouchableOpacity>
+          <View style={styles.termsTextContainer}>
+            <Text style={styles.termsText}>I agree to the </Text>
+            <TouchableOpacity onPress={() => setTermsModalVisible(true)} activeOpacity={0.7}>
+              <Text style={styles.termsLink}>Terms and Policies</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </View>
 
       {/* Terminal spacer removed to stop exactly at Sign in */}
@@ -1267,7 +1310,16 @@ const RegisterScreen = () => {
           <Modal transparent animationType="fade" visible={showCalendarModal}>
             <View style={styles.modalOverlay}>
               <View style={styles.calendarModalContainer}>
-                <Text style={styles.calendarModalTitle}>Select Birthday</Text>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.calendarModalTitle}>Select Birthday</Text>
+                  <TouchableOpacity
+                    onPress={closeCalendarModal}
+                    style={styles.modalCloseButton}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="close" size={24} color="#374151" />
+                  </TouchableOpacity>
+                </View>
                 
                 {/* Year Dropdown */}
                 <View style={styles.yearSelectorContainer}>
@@ -1302,7 +1354,16 @@ const RegisterScreen = () => {
           <Modal transparent animationType="fade" visible={showYearPicker}>
             <View style={styles.modalOverlay}>
               <View style={styles.yearPickerContainer}>
-                <Text style={styles.yearPickerTitle}>Select Year</Text>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.yearPickerTitle}>Select Year</Text>
+                  <TouchableOpacity
+                    onPress={() => setShowYearPicker(false)}
+                    style={styles.modalCloseButton}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="close" size={24} color="#374151" />
+                  </TouchableOpacity>
+                </View>
                 <ScrollView style={styles.yearPickerScroll} showsVerticalScrollIndicator={false}>
                   {yearPickerOptions.map((year) => (
                     <TouchableOpacity
@@ -1373,6 +1434,100 @@ const RegisterScreen = () => {
             <View style={styles.fbModalContent}>
               <Text style={[styles.fbModalTitle, { color: '#10B981' }]}>Registration Successful</Text>
               {successMessage ? <Text style={styles.fbModalMessage}>{successMessage}</Text> : null}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Terms and Policies Modal */}
+      <Modal
+        visible={termsModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setTermsModalVisible(false)}
+      >
+        <View style={styles.modalOverlayCenter}>
+          <View style={styles.termsModalCard}>
+            <View style={styles.termsModalContent}>
+              <Text style={styles.termsModalTitle}>Terms and Policies</Text>
+              <ScrollView 
+                style={styles.termsModalScroll}
+                showsVerticalScrollIndicator={true}
+                nestedScrollEnabled={true}
+              >
+                <Text style={styles.termsModalSectionTitle}>1. Account Registration</Text>
+                <Text style={styles.termsModalText}>
+                  By registering for SyncroGate, you agree to provide accurate, current, and complete information. You are responsible for maintaining the confidentiality of your account credentials.
+                </Text>
+
+                <Text style={styles.termsModalSectionTitle}>2. Acceptable Use</Text>
+                <Text style={styles.termsModalText}>
+                  You agree to use SyncroGate only for lawful purposes and in accordance with these Terms. You shall not:
+                </Text>
+                <Text style={styles.termsModalText}>
+                  • Use false or misleading information when registering{'\n'}
+                  • Attempt to gain unauthorized access to any part of the application{'\n'}
+                  • Interfere with or disrupt the integrity or performance of the application{'\n'}
+                  • Use the application for any illegal or unauthorized purpose
+                </Text>
+
+                <Text style={styles.termsModalSectionTitle}>3. Data Privacy</Text>
+                <Text style={styles.termsModalText}>
+                  Your personal information will be collected and processed in accordance with our Privacy Policy. We are committed to protecting your privacy and handling your data responsibly.
+                </Text>
+
+                <Text style={styles.termsModalSectionTitle}>4. Account Verification</Text>
+                <Text style={styles.termsModalText}>
+                  Student accounts require admin verification before full access is granted. You agree to cooperate with the verification process and understand that false information may result in account suspension or termination.
+                </Text>
+
+                <Text style={styles.termsModalSectionTitle}>5. User Responsibilities</Text>
+                <Text style={styles.termsModalText}>
+                  You are responsible for all activities that occur under your account. You must immediately notify us of any unauthorized use of your account or any other breach of security.
+                </Text>
+
+                <Text style={styles.termsModalSectionTitle}>6. Prohibited Activities</Text>
+                <Text style={styles.termsModalText}>
+                  The following activities are strictly prohibited:
+                </Text>
+                <Text style={styles.termsModalText}>
+                  • Sharing account credentials with others{'\n'}
+                  • Impersonating another user or entity{'\n'}
+                  • Engaging in any form of harassment or abuse{'\n'}
+                  • Violating any applicable laws or regulations
+                </Text>
+
+                <Text style={styles.termsModalSectionTitle}>7. Account Suspension and Termination</Text>
+                <Text style={styles.termsModalText}>
+                  We reserve the right to suspend or terminate your account if you violate these Terms and Policies or engage in any behavior that we deem inappropriate or harmful.
+                </Text>
+
+                <Text style={styles.termsModalSectionTitle}>8. Changes to Terms</Text>
+                <Text style={styles.termsModalText}>
+                  We may modify these Terms and Policies at any time. Continued use of the application after changes constitutes acceptance of the modified terms.
+                </Text>
+
+                <Text style={styles.termsModalSectionTitle}>9. Disclaimer</Text>
+                <Text style={styles.termsModalText}>
+                  SyncroGate is provided "as is" without warranties of any kind. We do not guarantee that the application will be error-free or continuously available.
+                </Text>
+
+                <Text style={styles.termsModalSectionTitle}>10. Contact Information</Text>
+                <Text style={styles.termsModalText}>
+                  If you have any questions about these Terms and Policies, please contact the administration through the appropriate channels provided in the application.
+                </Text>
+
+                <Text style={styles.termsModalFooter}>
+                  By accepting these Terms and Policies, you acknowledge that you have read, understood, and agree to be bound by all the terms and conditions stated above.
+                </Text>
+              </ScrollView>
+              <TouchableOpacity
+                style={styles.termsModalCloseButton}
+                onPress={() => setTermsModalVisible(false)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.termsModalCloseButtonText}>Close</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </View>
@@ -1685,8 +1840,6 @@ const styles = StyleSheet.create({
     color: theme.colors.primary,
     fontWeight: '600',
   },
-  fixedAge: { width: 70 },
-  fixedBirthday: { flex: 1 },
   readOnlyInput: {
     backgroundColor: '#F3F4F6',
     color: '#6B7280',
@@ -1725,11 +1878,23 @@ const styles = StyleSheet.create({
     maxWidth: 300,
     width: '80%',
   },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+    width: '100%',
+  },
+  modalCloseButton: {
+    padding: 4,
+    borderRadius: 4,
+    backgroundColor: '#F3F4F6',
+  },
   calendarModalTitle: {
     fontSize: 16,
     fontWeight: 'bold',
-    marginBottom: 16,
     color: '#111827',
+    flex: 1,
     textAlign: 'center',
   },
   calendarContainer: {
@@ -1840,8 +2005,8 @@ const styles = StyleSheet.create({
   yearPickerTitle: {
     fontSize: 16,
     fontWeight: 'bold',
-    marginBottom: 16,
     color: '#111827',
+    flex: 1,
     textAlign: 'center',
   },
   yearPickerScroll: {
@@ -1895,6 +2060,111 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   centeredPlaceholder: { textAlign: 'center' },
+  termsContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginHorizontal: 20,
+    marginBottom: 20,
+  },
+  termsContentContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxContainer: {
+    marginRight: 8,
+  },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderWidth: 2,
+    borderColor: '#D1D5DB',
+    borderRadius: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  checkboxChecked: {
+    backgroundColor: theme.colors.primary,
+    borderColor: theme.colors.primary,
+  },
+  termsTextContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+  },
+  termsText: {
+    fontSize: 12,
+    color: '#000000',
+  },
+  termsLink: {
+    fontSize: 12,
+    color: theme.colors.primary,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
+  termsModalCard: {
+    width: '90%',
+    maxWidth: 500,
+    maxHeight: '85%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  termsModalContent: {
+    flex: 1,
+  },
+  termsModalTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#050505',
+    marginBottom: 16,
+    textAlign: 'left',
+  },
+  termsModalScroll: {
+    maxHeight: 400,
+    marginBottom: 16,
+  },
+  termsModalSectionTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111827',
+    marginTop: 12,
+    marginBottom: 6,
+  },
+  termsModalText: {
+    fontSize: 14,
+    color: '#65676B',
+    textAlign: 'left',
+    lineHeight: 20,
+    marginBottom: 8,
+  },
+  termsModalFooter: {
+    fontSize: 13,
+    color: '#374151',
+    fontStyle: 'italic',
+    marginTop: 12,
+    marginBottom: 8,
+    lineHeight: 18,
+  },
+  termsModalCloseButton: {
+    backgroundColor: theme.colors.primary,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    alignSelf: 'center',
+    marginTop: 8,
+  },
+  termsModalCloseButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
 });
 
 export default RegisterScreen;

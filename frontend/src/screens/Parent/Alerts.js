@@ -912,7 +912,7 @@ const Alerts = () => {
         id: `sched_perm_resp_${alert.studentId}_${Date.now()}`,
         type: 'schedule_permission_response',
         title: 'Schedule Permission Granted',
-        message: `You have been granted permission to modify your schedule for 24 hours.`,
+        message: `${user?.firstName || 'Parent'} ${user?.lastName || ''} granted you permission to modify your schedule for 24 hours.`,
         status: 'unread',
         response: 'accepted',
         requestId: alert.requestId,

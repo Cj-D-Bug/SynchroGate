@@ -377,6 +377,14 @@ export const AuthProvider = ({ children }) => {
       setUser(userData);
       setRole(userData.role);
       await AsyncStorage.setItem("user", JSON.stringify(userData));
+      
+      // Cache user session for offline access
+      try {
+        const { cacheUserSession } = require('../offline/storage');
+        await cacheUserSession(userData);
+      } catch (error) {
+        console.log('Error caching user session:', error);
+      }
 
       // Generate and save FCM token immediately after registration
       // CRITICAL: This ensures all users have FCM tokens in the database
@@ -746,6 +754,14 @@ export const AuthProvider = ({ children }) => {
       setUser(userData);
       setRole(userData.role);
       await AsyncStorage.setItem("user", JSON.stringify(userData));
+      
+      // Cache user session for offline access
+      try {
+        const { cacheUserSession } = require('../offline/storage');
+        await cacheUserSession(userData);
+      } catch (error) {
+        console.log('Error caching user session:', error);
+      }
 
       // Generate and save FCM token immediately after login
       // CRITICAL: This ensures tokens are always up to date and refreshed
@@ -957,13 +973,29 @@ export const AuthProvider = ({ children }) => {
         // First launch after installation - clear any stored session and force role selection
         console.log("🚀 First launch detected - clearing ALL stored session data and requiring role selection");
         
-        // Clear ALL possible session storage keys
+        // Clear ALL possible session storage keys including offline cache
         await AsyncStorage.multiRemove([
           "user",
           "app_has_launched", // Clear old key too
           "session_restored",
-          "last_login"
+          "last_login",
+          "offline_user_session" // Clear offline session cache
         ]);
+        
+        // Also clear any dashboard cache that might exist
+        try {
+          const allKeys = await AsyncStorage.getAllKeys();
+          const cacheKeys = allKeys.filter(key => 
+            key.startsWith('dashboard_cache_') || 
+            key.startsWith('qrCodeUrl_') ||
+            key.startsWith('profilePic_')
+          );
+          if (cacheKeys.length > 0) {
+            await AsyncStorage.multiRemove(cacheKeys);
+          }
+        } catch (error) {
+          console.log("Error clearing cache keys:", error);
+        }
         
         // Sign out from Firebase auth to clear any persisted session
         try {
@@ -1019,7 +1051,29 @@ export const AuthProvider = ({ children }) => {
         const parsedUser = JSON.parse(storedUser);
         console.log("Parsed user data:", parsedUser); // Debug log
         
-        // Validate session before restoring
+        // OFFLINE MODE: If offline, restore session from cache without validation
+        // This allows users to navigate to dashboard and view QR codes offline
+        try {
+          const NetInfo = require('@react-native-community/netinfo').default;
+          const networkState = await NetInfo.fetch();
+          const isOnline = networkState.isConnected;
+          
+          if (!isOnline) {
+            console.log("📴 Offline mode detected - restoring session from cache");
+            // Restore user session from cache for offline access
+            setUser(parsedUser);
+            setRole(parsedUser.role);
+            setSessionRestored(true);
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            setInitializing(false);
+            console.log("✅ Session restored from cache for offline access");
+            return;
+          }
+        } catch (netInfoError) {
+          console.log("Could not check network status, proceeding with normal validation:", netInfoError);
+        }
+        
+        // Validate session before restoring (only when online)
         const isSessionValid = await validateSession(parsedUser);
         if (!isSessionValid) {
           console.log('Session validation failed, clearing stored data');
@@ -1331,15 +1385,38 @@ export const AuthProvider = ({ children }) => {
           console.log("   Error signing out on fresh install:", signOutError.message);
         }
         
-        // Clear all stored data
-        await AsyncStorage.multiRemove([
+        // Clear all stored data including offline cache
+        const keysToRemove = [
           "user",
           "app_has_launched",
           "session_restored",
-          "last_login"
-        ]);
+          "last_login",
+          "offline_user_session" // Clear offline session cache
+        ];
         
-        // Mark as launched
+        try {
+          await AsyncStorage.multiRemove(keysToRemove);
+        } catch (error) {
+          console.log("Error removing keys:", error);
+        }
+        
+        // Also clear any dashboard cache that might exist
+        try {
+          const allKeys = await AsyncStorage.getAllKeys();
+          const cacheKeys = allKeys.filter(key => 
+            key.startsWith('dashboard_cache_') || 
+            key.startsWith('qrCodeUrl_') ||
+            key.startsWith('profilePic_')
+          );
+          if (cacheKeys.length > 0) {
+            await AsyncStorage.multiRemove(cacheKeys);
+            console.log(`   Cleared ${cacheKeys.length} cache keys`);
+          }
+        } catch (error) {
+          console.log("Error clearing cache keys:", error);
+        }
+        
+        // Mark as launched BEFORE setting state
         await AsyncStorage.setItem("app_has_launched_v2", "true");
         
         // Clear state

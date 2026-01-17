@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useContext, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, Modal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, Modal, Dimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AuthContext } from '../../contexts/AuthContext';
 import { NetworkContext } from '../../contexts/NetworkContext';
@@ -11,6 +11,19 @@ import QRCodeDisplay from '../../components/QRCodeDisplay';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import * as ScreenCapture from 'expo-screen-capture';
 import { enqueue } from '../../offline/syncQueue';
+
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
+// Responsive calculations
+const getResponsiveSize = (size) => {
+  // Base size for 375px width (iPhone X/11/12 standard)
+  const baseWidth = 375;
+  return (size * SCREEN_WIDTH) / baseWidth;
+};
+
+const QR_SIZE = Math.min(Math.max(getResponsiveSize(260), 200), SCREEN_WIDTH * 0.7);
+const HORIZONTAL_PADDING = Math.max(getResponsiveSize(16), 12);
+const VERTICAL_PADDING = Math.max(getResponsiveSize(16), 12);
 
 const QRPreview = () => {
   const navigation = useNavigation();
@@ -44,6 +57,21 @@ const QRPreview = () => {
         });
       }
       
+      // Load QR code when screen is focused (ensures cache is checked)
+      const loadQrOnFocus = async () => {
+        if (!user?.studentId) return;
+        try {
+          const cached = await AsyncStorage.getItem(`qrCodeUrl_${user.studentId}`);
+          if (cached) {
+            setQrValue(cached);
+            console.log('✅ QR code loaded from cache on focus');
+          }
+        } catch (error) {
+          console.log('Error loading QR on focus:', error);
+        }
+      };
+      loadQrOnFocus();
+      
       // Cleanup function to restore tab bar when screen loses focus
       return () => {
         const parent = navigation.getParent();
@@ -53,34 +81,109 @@ const QRPreview = () => {
           });
         }
       };
-    }, [navigation])
+    }, [navigation, user?.studentId])
   );
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
       setError(null);
+      let cachedValue = null;
+      
       try {
-        if (!user?.studentId) { setQrValue(''); setError('Missing student ID'); return; }
-        // Try cached value first for instant load
+        if (!user?.studentId) { 
+          setQrValue(''); 
+          setError('Missing student ID'); 
+          setLoading(false);
+          return; 
+        }
+        
+        // ALWAYS try cached value first for instant load (works offline)
         try {
-          const cached = await AsyncStorage.getItem(`qrCodeUrl_${user.studentId}`);
-          if (cached) setQrValue(cached);
-        } catch {}
-        const ref = doc(db, 'student_QRcodes', String(user.studentId));
-        const snap = await getDoc(ref);
-        if (snap.exists() && snap.data()?.qrCodeUrl) {
-          const value = String(snap.data().qrCodeUrl);
-          setQrValue(value);
-          try { await AsyncStorage.setItem(`qrCodeUrl_${user.studentId}`, value); } catch {}
+          cachedValue = await AsyncStorage.getItem(`qrCodeUrl_${user.studentId}`);
+          if (cachedValue) {
+            setQrValue(cachedValue);
+            setLoading(false);
+            console.log('✅ QR code loaded from cache');
+            // If offline, use cached value and return early
+            if (!isConnected) {
+              console.log('📴 Offline mode - using cached QR code');
+              return;
+            }
+          }
+        } catch (cacheError) {
+          console.log('Error loading cached QR code:', cacheError);
+        }
+        
+        // Only try to fetch from Firestore if online
+        if (isConnected) {
+          try {
+            const ref = doc(db, 'student_QRcodes', String(user.studentId));
+            const snap = await getDoc(ref);
+            if (snap.exists() && snap.data()?.qrCodeUrl) {
+              const value = String(snap.data().qrCodeUrl);
+              setQrValue(value);
+              // Always save to cache for offline access
+              try { 
+                await AsyncStorage.setItem(`qrCodeUrl_${user.studentId}`, value);
+                console.log('✅ QR code saved to cache');
+              } catch (saveError) {
+                console.log('Error saving QR code to cache:', saveError);
+              }
+            } else {
+              // If no QR code found online and no cached value, show error
+              if (!cachedValue) {
+                setError('QR code not available');
+                try { await AsyncStorage.removeItem(`qrCodeUrl_${user.studentId}`); } catch {}
+              } else {
+                // Keep using cached value even if not found online
+                console.log('⚠️ QR code not found online, but using cached value');
+              }
+            }
+          } catch (firestoreError) {
+            console.error('Error loading QR code from Firestore:', firestoreError);
+            // If we have cached value, keep using it
+            if (cachedValue) {
+              console.log('Using cached QR code due to Firestore error');
+              setQrValue(cachedValue);
+            } else {
+              // Network error - try to use cached value if available
+              if (firestoreError?.code?.includes('unavailable') || firestoreError?.code?.includes('network') || firestoreError?.message?.toLowerCase().includes('network')) {
+                const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: firestoreError.message });
+                setNetworkErrorTitle(errorInfo.title);
+                setNetworkErrorMessage(errorInfo.message);
+                setNetworkErrorColor(errorInfo.color);
+                setNetworkErrorVisible(true);
+                setTimeout(() => setNetworkErrorVisible(false), 5000);
+              } else {
+                setError('Failed to load QR code');
+              }
+            }
+          }
         } else {
-          setError('QR code not available');
-          try { await AsyncStorage.removeItem(`qrCodeUrl_${user.studentId}`); } catch {}
+          // Offline mode - if we have cached value, use it; otherwise show error
+          if (!cachedValue) {
+            setError('QR code not available offline. Please connect to internet to load QR code.');
+          } else {
+            console.log('📴 Offline mode - displaying cached QR code');
+          }
         }
       } catch (e) {
         console.error('Error loading QR code:', e);
-        // Only show network error modal for actual network errors
-        if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
+        // If we have cached value, use it
+        if (cachedValue) {
+          setQrValue(cachedValue);
+          console.log('Using cached QR code due to error');
+        } else if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
+          // Network error - try to use cached value if available
+          try {
+            const cached = await AsyncStorage.getItem(`qrCodeUrl_${user.studentId}`);
+            if (cached) {
+              setQrValue(cached);
+              console.log('Using cached QR code after network error');
+              return;
+            }
+          } catch {}
           const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
           setNetworkErrorTitle(errorInfo.title);
           setNetworkErrorMessage(errorInfo.message);
@@ -88,14 +191,17 @@ const QRPreview = () => {
           setNetworkErrorVisible(true);
           setTimeout(() => setNetworkErrorVisible(false), 5000);
         } else {
-          setError('Failed to load QR code');
+          // If we have cached value, use it; otherwise show error
+          if (!cachedValue) {
+            setError('Failed to load QR code');
+          }
         }
       } finally {
         setLoading(false);
       }
     };
     load();
-  }, [user?.studentId]);
+  }, [user?.studentId, isConnected]);
 
   // Listen for recent scans to show undo button
   useEffect(() => {
@@ -329,7 +435,7 @@ const QRPreview = () => {
           {/* Warning Message */}
           <View style={styles.warningContainer}>
             <View style={styles.warningIconContainer}>
-              <Ionicons name="warning" size={24} color="#DC2626" />
+              <Ionicons name="warning" size={getResponsiveSize(24)} color="#DC2626" />
             </View>
             <Text style={styles.warningTitle}>Security Notice</Text>
             <Text style={styles.warningText}>
@@ -339,7 +445,7 @@ const QRPreview = () => {
 
           {/* QR Code Container */}
           <View style={styles.qrContainer}>
-            <QRCodeDisplay value={qrValue} size={260} />
+            <QRCodeDisplay value={qrValue} size={QR_SIZE} />
           </View>
 
           {/* Undo Entry Button - always visible, disabled after 5 minutes */}
@@ -355,7 +461,7 @@ const QRPreview = () => {
               >
                 <Ionicons 
                   name="arrow-undo-outline" 
-                  size={20} 
+                  size={getResponsiveSize(20)} 
                   color={timeRemaining <= 0 ? '#9CA3AF' : '#FFFFFF'} 
                 />
                 <Text style={[
@@ -396,65 +502,75 @@ const styles = StyleSheet.create({
     backgroundColor: '#F9FAFB',
   },
   container: {
-    padding: 16,
+    padding: HORIZONTAL_PADDING,
     paddingTop: 0,
-    paddingBottom: 120,
+    paddingBottom: Math.max(getResponsiveSize(120), 80),
     flexGrow: 1,
   },
   loadingContainer: {
     flex: 1,
-    padding: 16,
-    paddingTop: 50,
-    paddingBottom: 120,
+    padding: HORIZONTAL_PADDING,
+    paddingTop: getResponsiveSize(50),
+    paddingBottom: Math.max(getResponsiveSize(120), 80),
     alignItems: 'center',
     justifyContent: 'center',
   },
   errorContainer: {
     flex: 1,
-    padding: 16,
-    paddingTop: 50,
-    paddingBottom: 120,
+    padding: HORIZONTAL_PADDING,
+    paddingTop: getResponsiveSize(50),
+    paddingBottom: Math.max(getResponsiveSize(120), 80),
     alignItems: 'center',
     justifyContent: 'center',
   },
-  loadingText: { marginTop: 12, color: '#6B7280', fontSize: 16 },
-  errorText: { color: '#DC2626', fontSize: 16 },
+  loadingText: { 
+    marginTop: getResponsiveSize(12), 
+    color: '#6B7280', 
+    fontSize: getResponsiveSize(16) 
+  },
+  errorText: { 
+    color: '#DC2626', 
+    fontSize: getResponsiveSize(16),
+    textAlign: 'center',
+    paddingHorizontal: HORIZONTAL_PADDING,
+  },
   warningContainer: {
     width: '100%',
     backgroundColor: '#FEF2F2',
     borderWidth: 1,
     borderColor: '#FECACA',
     borderRadius: 8,
-    padding: 16,
-    marginTop: 12, // 4 (statsGrid) + 8 (card marginTop) = 12 to match card position
-    marginBottom: 8,
+    padding: HORIZONTAL_PADDING,
+    marginTop: getResponsiveSize(12),
+    marginBottom: getResponsiveSize(8),
     alignItems: 'center',
   },
   warningIconContainer: {
-    width: 48,
-    height: 48,
+    width: getResponsiveSize(48),
+    height: getResponsiveSize(48),
     borderRadius: 8,
     backgroundColor: '#FEE2E2',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 12,
+    marginBottom: getResponsiveSize(12),
   },
   warningTitle: {
-    fontSize: 18,
+    fontSize: getResponsiveSize(18),
     fontWeight: '700',
     color: '#991B1B',
-    marginBottom: 8,
+    marginBottom: getResponsiveSize(8),
     textAlign: 'center',
   },
   warningText: {
-    fontSize: 14,
+    fontSize: getResponsiveSize(14),
     color: '#7F1D1D',
     textAlign: 'center',
-    lineHeight: 20,
+    lineHeight: getResponsiveSize(20),
+    paddingHorizontal: getResponsiveSize(4),
   },
   qrContainer: { 
     backgroundColor: '#FFFFFF', 
-    padding: 16, 
+    padding: HORIZONTAL_PADDING, 
     borderRadius: 8, 
     borderWidth: 1, 
     borderColor: '#E5E7EB', 
@@ -465,23 +581,26 @@ const styles = StyleSheet.create({
     alignItems: 'center', 
     justifyContent: 'center',
     width: '100%',
-    marginTop: 0, // No extra margin, follows warning container
+    marginTop: 0,
+    minHeight: QR_SIZE + (HORIZONTAL_PADDING * 2),
   },
   undoContainer: {
     width: '100%',
-    marginTop: 16,
+    marginTop: getResponsiveSize(16),
     alignItems: 'center',
+    paddingHorizontal: HORIZONTAL_PADDING,
   },
   undoButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#DC2626',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
+    paddingVertical: getResponsiveSize(12),
+    paddingHorizontal: getResponsiveSize(20),
     borderRadius: 8,
-    gap: 8,
-    minWidth: 200,
+    gap: getResponsiveSize(8),
+    width: '100%',
+    maxWidth: Math.min(SCREEN_WIDTH * 0.9, 400),
     shadowColor: '#000',
     shadowOpacity: 0.1,
     shadowOffset: { width: 0, height: 2 },
@@ -494,8 +613,9 @@ const styles = StyleSheet.create({
   },
   undoButtonText: {
     color: '#FFFFFF',
-    fontSize: 14,
+    fontSize: getResponsiveSize(14),
     fontWeight: '700',
+    flexShrink: 1,
   },
   undoButtonTextDisabled: {
     color: '#9CA3AF',
@@ -506,37 +626,36 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)', 
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 20
+    paddingHorizontal: HORIZONTAL_PADDING,
   },
   fbModalCard: {
-    width: '85%',
-    maxWidth: 400,
+    width: Math.min(SCREEN_WIDTH * 0.85, 400),
     backgroundColor: '#FFFFFF',
     borderRadius: 8,
-    padding: 20,
+    padding: getResponsiveSize(20),
     shadowColor: '#000',
     shadowOpacity: 0.2,
     shadowOffset: { width: 0, height: 2 },
     shadowRadius: 8,
     elevation: 5,
-    minHeight: 120,
+    minHeight: getResponsiveSize(120),
     justifyContent: 'space-between',
   },
   fbModalContent: {
     flex: 1,
   },
   fbModalTitle: {
-    fontSize: 20,
+    fontSize: getResponsiveSize(20),
     fontWeight: '600',
     color: '#050505',
-    marginBottom: 12,
+    marginBottom: getResponsiveSize(12),
     textAlign: 'left',
   },
   fbModalMessage: {
-    fontSize: 15,
+    fontSize: getResponsiveSize(15),
     color: '#65676B',
     textAlign: 'left',
-    lineHeight: 20,
+    lineHeight: getResponsiveSize(20),
   },
 });
 

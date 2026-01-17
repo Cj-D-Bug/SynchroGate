@@ -4,7 +4,7 @@ import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { AuthContext } from '../../contexts/AuthContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, getDoc, collection, query, where, getDocs, setDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
 import { getNetworkErrorMessage } from '../../utils/networkErrorHandler';
 
@@ -33,6 +33,14 @@ const ParentSchedule = () => {
   const [networkErrorTitle, setNetworkErrorTitle] = useState('');
   const [networkErrorMessage, setNetworkErrorMessage] = useState('');
   const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  
+  // Schedule permission states
+  const [hasPermission, setHasPermission] = useState(false);
+  const [permissionConfirmVisible, setPermissionConfirmVisible] = useState(false);
+  const [feedbackVisible, setFeedbackVisible] = useState(false);
+  const [feedbackMessage, setFeedbackMessage] = useState('');
+  const [feedbackSuccess, setFeedbackSuccess] = useState(true);
+  const [isProcessingPermission, setIsProcessingPermission] = useState(false);
 
   useEffect(() => {
     const loadProfile = async () => {
@@ -262,6 +270,45 @@ const ParentSchedule = () => {
     }
   };
 
+  // Check schedule permission for selected child
+  useEffect(() => {
+    const checkPermission = async () => {
+      if (!selectedChildId) {
+        setHasPermission(false);
+        return;
+      }
+      
+      const selectedChild = children.find(child => child.id === selectedChildId);
+      if (!selectedChild?.studentId) {
+        setHasPermission(false);
+        return;
+      }
+      
+      try {
+        const permRef = doc(db, 'student_schedule_permissions', selectedChild.studentId);
+        const permSnap = await getDoc(permRef);
+        if (permSnap.exists()) {
+          const data = permSnap.data();
+          const expiryTime = data?.expiresAt ? new Date(data.expiresAt) : null;
+          const now = new Date();
+          
+          if (expiryTime && expiryTime > now) {
+            setHasPermission(true);
+          } else {
+            setHasPermission(false);
+          }
+        } else {
+          setHasPermission(false);
+        }
+      } catch (error) {
+        console.error('Error checking permission:', error);
+        setHasPermission(false);
+      }
+    };
+    
+    checkPermission();
+  }, [selectedChildId, children]);
+
   // Load schedule for selected child
   useEffect(() => {
     const fetchSchedule = async () => {
@@ -426,6 +473,152 @@ const ParentSchedule = () => {
     try { await logout?.(); } catch {}
   };
   const cancelLogout = () => setLogoutVisible(false);
+
+  // Grant schedule permission
+  const grantPermission = async () => {
+    if (!selectedChildId || isProcessingPermission) return;
+    
+    const selectedChild = children.find(child => child.id === selectedChildId);
+    if (!selectedChild?.studentId) return;
+    
+    try {
+      setIsProcessingPermission(true);
+      setPermissionConfirmVisible(false);
+      
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 hours from now
+      
+      // Store permission in student_schedule_permissions collection
+      const permRef = doc(db, 'student_schedule_permissions', selectedChild.studentId);
+      await setDoc(permRef, {
+        studentId: selectedChild.studentId,
+        grantedAt: now.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+        grantedBy: user?.parentId || user?.uid,
+        parentName: `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || 'Parent',
+      }, { merge: true });
+      
+      // Create notification for student
+      const notification = {
+        id: `sched_perm_granted_${selectedChild.studentId}_${Date.now()}`,
+        type: 'schedule_permission_response',
+        title: 'Schedule Permission Granted',
+        message: `${user?.firstName || 'Parent'} ${user?.lastName || ''} granted you permission to modify your schedule for 24 hours.`,
+        status: 'unread',
+        response: 'accepted',
+        studentId: selectedChild.studentId,
+        studentName: selectedChild.firstName || 'Student',
+        expiresAt: expiresAt.toISOString(),
+        createdAt: now.toISOString()
+      };
+      
+      // Add to student alerts
+      const studentAlertsRef = doc(db, 'student_alerts', selectedChild.studentId);
+      const studentSnap = await getDoc(studentAlertsRef);
+      const existing = studentSnap.exists() ? (Array.isArray(studentSnap.data()?.items) ? studentSnap.data().items : []) : [];
+      const isDuplicate = existing.some(it => String(it?.id) === String(notification.id));
+      if (!isDuplicate) {
+        const updated = [...existing, notification];
+        await setDoc(studentAlertsRef, { items: updated }, { merge: true });
+        // Backend will handle push notification automatically
+      }
+      
+      setHasPermission(true);
+      setFeedbackMessage('Permission granted successfully. Student can now modify their schedule for 24 hours.');
+      setFeedbackSuccess(true);
+      setFeedbackVisible(true);
+      setTimeout(() => setFeedbackVisible(false), 3000);
+    } catch (error) {
+      console.error('Error granting permission:', error);
+      // Only show network error modal for actual network errors
+      if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
+        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
+        setNetworkErrorTitle(errorInfo.title);
+        setNetworkErrorMessage(errorInfo.message);
+        setNetworkErrorColor(errorInfo.color);
+        setNetworkErrorVisible(true);
+        setTimeout(() => setNetworkErrorVisible(false), 5000);
+      } else {
+        setFeedbackMessage('Failed to grant permission. Please try again.');
+        setFeedbackSuccess(false);
+        setFeedbackVisible(true);
+        setTimeout(() => setFeedbackVisible(false), 3000);
+      }
+    } finally {
+      setIsProcessingPermission(false);
+    }
+  };
+
+  // Remove schedule permission
+  const removePermission = async () => {
+    if (!selectedChildId || isProcessingPermission) return;
+    
+    const selectedChild = children.find(child => child.id === selectedChildId);
+    if (!selectedChild?.studentId) return;
+    
+    try {
+      setIsProcessingPermission(true);
+      setPermissionConfirmVisible(false);
+      
+      // Delete permission document
+      const permRef = doc(db, 'student_schedule_permissions', selectedChild.studentId);
+      await deleteDoc(permRef);
+      
+      // Create notification for student
+      const notification = {
+        id: `sched_perm_removed_${selectedChild.studentId}_${Date.now()}`,
+        type: 'schedule_permission_response',
+        title: 'Schedule Permission Removed',
+        message: `${user?.firstName || 'Parent'} ${user?.lastName || ''} removed your permission to modify your schedule.`,
+        status: 'unread',
+        response: 'removed',
+        studentId: selectedChild.studentId,
+        studentName: selectedChild.firstName || 'Student',
+        createdAt: new Date().toISOString()
+      };
+      
+      // Add to student alerts
+      const studentAlertsRef = doc(db, 'student_alerts', selectedChild.studentId);
+      const studentSnap = await getDoc(studentAlertsRef);
+      const existing = studentSnap.exists() ? (Array.isArray(studentSnap.data()?.items) ? studentSnap.data().items : []) : [];
+      const isDuplicate = existing.some(it => String(it?.id) === String(notification.id));
+      if (!isDuplicate) {
+        const updated = [...existing, notification];
+        await setDoc(studentAlertsRef, { items: updated }, { merge: true });
+        // Backend will handle push notification automatically
+      }
+      
+      setHasPermission(false);
+      setFeedbackMessage('Permission removed successfully.');
+      setFeedbackSuccess(true);
+      setFeedbackVisible(true);
+      setTimeout(() => setFeedbackVisible(false), 3000);
+    } catch (error) {
+      console.error('Error removing permission:', error);
+      // Only show network error modal for actual network errors
+      if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
+        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
+        setNetworkErrorTitle(errorInfo.title);
+        setNetworkErrorMessage(errorInfo.message);
+        setNetworkErrorColor(errorInfo.color);
+        setNetworkErrorVisible(true);
+        setTimeout(() => setNetworkErrorVisible(false), 5000);
+      } else {
+        setFeedbackMessage('Failed to remove permission. Please try again.');
+        setFeedbackSuccess(false);
+        setFeedbackVisible(true);
+        setTimeout(() => setFeedbackVisible(false), 3000);
+      }
+    } finally {
+      setIsProcessingPermission(false);
+    }
+  };
+
+  // Handle permission button press
+  const handlePermissionPress = () => {
+    if (!selectedChildId) return;
+    setPermissionConfirmVisible(true);
+  };
 
   return (
     <View style={styles.wrapper}>
@@ -760,6 +953,76 @@ const ParentSchedule = () => {
           </View>
         </View>
       </Modal>
+
+      {/* Permission Confirmation Modal */}
+      <Modal transparent animationType="fade" visible={permissionConfirmVisible} onRequestClose={() => setPermissionConfirmVisible(false)}>
+        <View style={styles.modalOverlayCenter}>
+          <View style={styles.fbModalCard}>
+            <View style={styles.fbModalContent}>
+              <Text style={styles.fbModalTitle}>
+                {hasPermission ? 'Remove Schedule Permission?' : 'Grant Schedule Permission?'}
+              </Text>
+              <Text style={styles.fbModalMessage}>
+                {hasPermission 
+                  ? `Are you sure you want to remove ${selectedChildId ? (children.find(c => c.id === selectedChildId)?.firstName || 'the student') : 'the student'}'s permission to modify their schedule?`
+                  : `Do you want to grant ${selectedChildId ? (children.find(c => c.id === selectedChildId)?.firstName || 'the student') : 'the student'} permission to modify their schedule for 24 hours?`
+                }
+              </Text>
+            </View>
+            <View style={styles.fbModalButtonContainer}>
+              <TouchableOpacity 
+                style={[styles.fbModalCancelButton, isProcessingPermission && styles.fbModalButtonDisabled]} 
+                onPress={() => setPermissionConfirmVisible(false)}
+                disabled={isProcessingPermission}
+              >
+                <Text style={styles.fbModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[
+                  styles.fbModalConfirmButton, 
+                  { backgroundColor: hasPermission ? '#DC2626' : '#10B981' },
+                  isProcessingPermission && styles.fbModalButtonDisabled
+                ]} 
+                onPress={hasPermission ? removePermission : grantPermission}
+                disabled={isProcessingPermission}
+              >
+                <Text style={styles.fbModalConfirmText}>
+                  {isProcessingPermission ? 'Processing...' : (hasPermission ? 'Remove' : 'Grant')}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Feedback Modal */}
+      <Modal transparent animationType="fade" visible={feedbackVisible} onRequestClose={() => setFeedbackVisible(false)}>
+        <View style={styles.modalOverlayCenter}>
+          <View style={styles.fbModalCard}>
+            <View style={styles.fbModalContent}>
+              <Text style={[styles.fbModalTitle, { color: feedbackSuccess ? '#10B981' : '#DC2626' }]}>
+                {feedbackSuccess ? 'Success' : 'Error'}
+              </Text>
+              <Text style={styles.fbModalMessage}>{feedbackMessage}</Text>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Lock/Unlock Permission Button */}
+      {selectedChildId && children.length > 0 && (
+        <TouchableOpacity
+          style={styles.permissionButton}
+          onPress={handlePermissionPress}
+          activeOpacity={0.8}
+        >
+          <Ionicons 
+            name={hasPermission ? 'lock-open-outline' : 'lock-closed-outline'} 
+            size={24} 
+            color="#FFFFFF" 
+          />
+        </TouchableOpacity>
+      )}
     </View>
   );
 };
@@ -1026,5 +1289,57 @@ const styles = StyleSheet.create({
     color: '#65676B',
     textAlign: 'left',
     lineHeight: 20,
+  },
+  fbModalButtonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 20,
+    gap: 8,
+  },
+  fbModalCancelButton: {
+    backgroundColor: '#E4E6EB',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fbModalCancelText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#050505',
+  },
+  fbModalConfirmButton: {
+    backgroundColor: '#1877F2',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fbModalConfirmText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  fbModalButtonDisabled: {
+    opacity: 0.5,
+  },
+  permissionButton: {
+    position: 'absolute',
+    bottom: 100,
+    right: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#004F89',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 8,
+    elevation: 8,
+    zIndex: 1000,
   },
 });

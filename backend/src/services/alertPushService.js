@@ -563,6 +563,14 @@ const initializeStudentAlertsListener = () => {
             console.log(`⏭️ [LISTENER] SKIP - student ${studentId} is NOT LOGGED IN or INACTIVE`);
           }
           
+          // CRITICAL: Skip parent notifications for schedule_permission_response alerts
+          // These are responses FROM parents TO students, so parents don't need to be notified
+          const alertType = alert.type || alert.alertType || '';
+          if (alertType.toLowerCase() === 'schedule_permission_response') {
+            console.log(`⏭️ [LISTENER] SKIP - schedule_permission_response alert (parent-to-student response) - not sending to parents`);
+            continue;
+          }
+          
           // Now send push notifications to linked parents (if any)
           if (linkedParents.length === 0) {
             console.log(`⏭️ [LISTENER] No active parent links found for student ${studentId} - skipping parent notifications`);
