@@ -13,10 +13,11 @@ import { AuthContext } from '../../contexts/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
 import { collection, query, getDocs, orderBy } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
-import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
 import { NetworkContext } from '../../contexts/NetworkContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { cacheAnnouncements, getCachedAnnouncements } from '../../offline/storage';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 
 const Events = () => {
   const { user, logout } = useContext(AuthContext);
@@ -29,10 +30,8 @@ const Events = () => {
   const [announcements, setAnnouncements] = useState([]);
   const [announcementsLoading, setAnnouncementsLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState('all');
-  const [networkErrorVisible, setNetworkErrorVisible] = useState(false);
-  const [networkErrorTitle, setNetworkErrorTitle] = useState('');
-  const [networkErrorMessage, setNetworkErrorMessage] = useState('');
-  const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
 
   // Hide student tab while focused and restore on blur
   useFocusEffect(
@@ -136,6 +135,24 @@ const Events = () => {
       setAnnouncementsLoading(false);
     }
   };
+
+  // Network monitoring
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     if (isFocused) loadAnnouncements();
@@ -318,6 +335,8 @@ const Events = () => {
             )}
         </View>
       </ScrollView>
+      
+      <OfflineBanner visible={showOfflineBanner} />
     </View>
 
     {/* Logout Modal */}
@@ -346,17 +365,6 @@ const Events = () => {
       </View>
     </Modal>
 
-    {/* Network Error Modal */}
-    <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
-      <View style={styles.modalOverlayCenter}>
-        <View style={styles.fbModalCard}>
-          <View style={styles.fbModalContent}>
-            <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
-            {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
-          </View>
-        </View>
-      </View>
-    </Modal>
   </>);
 };
 
@@ -626,4 +634,3 @@ const styles = StyleSheet.create({
 });
 
 export default Events;
-

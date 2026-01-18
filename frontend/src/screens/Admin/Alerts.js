@@ -7,6 +7,9 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { doc, getDoc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
 import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
+import { fetchWithCache, isNetworkError } from '../../utils/offlineCache';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 import * as Notifications from 'expo-notifications';
 const AboutLogo = require('../../assets/logo.png');
 
@@ -26,10 +29,8 @@ export default function AdminAlerts() {
   const [feedbackSuccess, setFeedbackSuccess] = useState(true);
   const [logoutVisible, setLogoutVisible] = useState(false);
   const [markingAsRead, setMarkingAsRead] = useState(false);
-  const [networkErrorVisible, setNetworkErrorVisible] = useState(false);
-  const [networkErrorTitle, setNetworkErrorTitle] = useState('');
-  const [networkErrorMessage, setNetworkErrorMessage] = useState('');
-  const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
   const sidebarAnimRight = useState(new Animated.Value(-width * 0.6))[0];
 
   // Determine active sidebar item based on current route
@@ -59,33 +60,52 @@ export default function AdminAlerts() {
   const loadAlerts = async () => {
     try {
       setLoading(true);
-      const ref = doc(db, 'admin_alerts', 'inbox');
-      const snap = await getDoc(ref);
-      const items = snap.exists() ? (Array.isArray(snap.data()?.items) ? snap.data().items : []) : [];
-      setAlerts(items.map(it => ({
-        id: it.id,
-        type: it.type || 'general',
-        title: it.title || 'Alert',
-        message: it.message || '',
-        createdAt: it.createdAt || new Date().toISOString(),
-        status: it.status || 'unread',
-        studentId: it.studentId,
-        studentName: it.studentName,
-        yearLevel: it.yearLevel,
-      })).sort((a,b)=> new Date(b.createdAt) - new Date(a.createdAt)));
+      const { data, fromCache } = await fetchWithCache('admin_alerts', async () => {
+        const ref = doc(db, 'admin_alerts', 'inbox');
+        const snap = await getDoc(ref);
+        const items = snap.exists() ? (Array.isArray(snap.data()?.items) ? snap.data().items : []) : [];
+        return items.map(it => ({
+          id: it.id,
+          type: it.type || 'general',
+          title: it.title || 'Alert',
+          message: it.message || '',
+          createdAt: it.createdAt || new Date().toISOString(),
+          status: it.status || 'unread',
+          studentId: it.studentId,
+          studentName: it.studentName,
+          yearLevel: it.yearLevel,
+        })).sort((a,b)=> new Date(b.createdAt) - new Date(a.createdAt));
+      });
+      setAlerts(data);
+      if (fromCache) {
+        console.log('Loaded alerts from offline cache');
+        setShowOfflineBanner(true);
+      }
     } catch (e) {
       console.error('Error loading alerts:', e);
-      // Only show network error modal for actual network errors
-      if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
+      if (isNetworkError(e)) {
+        setShowOfflineBanner(true);
       }
     } finally { setLoading(false); }
   };
+
+  // Monitor network connectivity
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const isConnected = state.isConnected && state.isInternetReachable;
+      setIsOnline(isConnected);
+      setShowOfflineBanner(!isConnected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const isConnected = state.isConnected && state.isInternetReachable;
+      setIsOnline(isConnected);
+      setShowOfflineBanner(!isConnected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => { loadAlerts(); }, []);
   // Safety: ensure loading doesn't hang
@@ -109,13 +129,8 @@ export default function AdminAlerts() {
       setLoading(false);
     }, (error) => {
       console.error('Error in admin alerts snapshot:', error);
-      const errorInfo = getNetworkErrorMessage(error);
-      if (error?.code?.includes('unavailable') || error?.code?.includes('deadline-exceeded') || error?.message?.toLowerCase().includes('network') || error?.message?.toLowerCase().includes('connection')) {
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
+      if (isNetworkError(error)) {
+        setShowOfflineBanner(true);
       }
       setLoading(false);
     });
@@ -134,18 +149,22 @@ export default function AdminAlerts() {
       }
     } catch (e) {
       console.error('Error marking alert as read:', e);
-      const errorInfo = getNetworkErrorMessage(e);
-      if (e.type === 'no_internet' || e.type === 'timeout' || e.type === 'unstable_connection') {
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
+      if (isNetworkError(e)) {
+        setShowOfflineBanner(true);
       }
     }
   };
 
   const markAllAsRead = async () => {
+    // Check if offline
+    if (!isOnline) {
+      setFeedbackMessage('Cannot mark as read while offline. Please check your internet connection.');
+      setFeedbackSuccess(false);
+      setFeedbackVisible(true);
+      setTimeout(() => setFeedbackVisible(false), 3000);
+      return;
+    }
+
     try {
       setMarkingAsRead(true);
       const ref = doc(db, 'admin_alerts', 'inbox');
@@ -159,12 +178,10 @@ export default function AdminAlerts() {
       console.error('Error marking all as read:', error);
       // Only show network error modal for actual network errors
       if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
+        setFeedbackMessage('Cannot mark as read while offline. Please check your internet connection.');
+        setFeedbackSuccess(false);
+        setFeedbackVisible(true);
+        setTimeout(() => setFeedbackVisible(false), 3000);
       } else {
         // Avoid showing a blocking modal for mark-all-as-read; log instead
         console.warn('Failed to mark admin alerts as read:', error);
@@ -192,6 +209,7 @@ export default function AdminAlerts() {
 
   return (<>
     <View style={styles.wrapper}>
+      <OfflineBanner visible={showOfflineBanner} />
       <Modal transparent visible={sidebarOpen} animationType="fade" onRequestClose={() => toggleSidebar(false)}>
         <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => toggleSidebar(false)} />
         <Animated.View style={[styles.sidebar, { right: sidebarAnimRight }]}>
@@ -381,7 +399,19 @@ export default function AdminAlerts() {
                   >
                     <Ionicons name="mail-outline" size={18} color="#004f89" />
                   </TouchableOpacity>
-                  <TouchableOpacity onPress={() => setDeleteConfirmVisible(true)} style={[styles.actionPill, { marginRight: 0 }]}>
+                  <TouchableOpacity 
+                    onPress={() => {
+                      if (!isOnline) {
+                        setFeedbackMessage('Cannot delete alerts while offline. Please check your internet connection.');
+                        setFeedbackSuccess(false);
+                        setFeedbackVisible(true);
+                        setTimeout(() => setFeedbackVisible(false), 3000);
+                        return;
+                      }
+                      setDeleteConfirmVisible(true);
+                    }} 
+                    style={[styles.actionPill, { marginRight: 0 }]}
+                  >
                     <Ionicons name="trash-outline" size={18} color="#004f89" />
                   </TouchableOpacity>
                 </View>
@@ -453,6 +483,17 @@ export default function AdminAlerts() {
               ]} 
               onPress={async () => {
                 if (isDeleting) return;
+
+                // Check if offline
+                if (!isOnline) {
+                  setDeleteConfirmVisible(false);
+                  setFeedbackMessage('Cannot delete alerts while offline. Please check your internet connection.');
+                  setFeedbackSuccess(false);
+                  setFeedbackVisible(true);
+                  setTimeout(() => setFeedbackVisible(false), 3000);
+                  return;
+                }
+
                 setIsDeleting(true);
                 try {
                   const ref = doc(db, 'admin_alerts', 'inbox');
@@ -499,22 +540,12 @@ export default function AdminAlerts() {
       <View style={styles.modalOverlayCenter}>
         <View style={styles.fbModalCard}>
           <View style={styles.fbModalContent}>
-            <Text style={[styles.fbModalTitle, { color: feedbackSuccess ? '#10B981' : '#DC2626' }]}>
-              {feedbackSuccess ? 'Success' : 'Error'}
+            <Text style={[styles.fbModalTitle, { 
+              color: feedbackMessage?.toLowerCase().includes('offline') ? '#8B0000' : (feedbackSuccess ? '#10B981' : '#DC2626')
+            }]}>
+              {feedbackMessage?.toLowerCase().includes('offline') ? 'No internet Connection' : (feedbackSuccess ? 'Success' : 'Error')}
             </Text>
             <Text style={styles.fbModalMessage}>{feedbackMessage}</Text>
-          </View>
-        </View>
-      </View>
-    </Modal>
-
-    {/* Network Error Modal */}
-    <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
-      <View style={styles.modalOverlayCenter}>
-        <View style={styles.fbModalCard}>
-          <View style={styles.fbModalContent}>
-            <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
-            {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
           </View>
         </View>
       </View>
@@ -749,5 +780,4 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
 });
-
 

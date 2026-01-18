@@ -22,7 +22,8 @@ import { db } from '../../utils/firebaseConfig';
 import { wp, hp, fontSizes, responsiveStyles, getResponsiveDimensions } from '../../utils/responsive';
 import avatarEventEmitter from '../../utils/avatarEventEmitter';
 import { cacheDashboardData, getCachedDashboardData } from '../../offline/storage';
-import { getNetworkErrorMessage } from '../../utils/networkErrorHandler';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 
 const { width, height } = Dimensions.get('window');
 const statusBarHeight = StatusBar.currentHeight || 0;
@@ -49,6 +50,14 @@ const StudentDashboard = () => {
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [feedbackSuccess, setFeedbackSuccess] = useState(true);
   const [hasQrCode, setHasQrCode] = useState(false);
+  const [errorModalVisible, setErrorModalVisible] = useState(false);
+  const [errorModalMessage, setErrorModalMessage] = useState('');
+  
+  const showErrorModal = (message) => {
+    setErrorModalMessage(message);
+    setErrorModalVisible(true);
+    setTimeout(() => setErrorModalVisible(false), 3000);
+  };
   
   const [loading, setLoading] = useState(false);
   const [profileLoaded, setProfileLoaded] = useState(false);
@@ -60,10 +69,7 @@ const StudentDashboard = () => {
   const [scheduleLoading, setScheduleLoading] = useState(true);
   const [ongoingLoading, setOngoingLoading] = useState(true);
   const [isLandscape, setIsLandscape] = useState(false);
-  const [networkErrorVisible, setNetworkErrorVisible] = useState(false);
-  const [networkErrorTitle, setNetworkErrorTitle] = useState('');
-  const [networkErrorMessage, setNetworkErrorMessage] = useState('');
-  const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
 
   // Load profile picture using same key as Profile; refresh on focus
   const loadProfilePic = React.useCallback(async () => {
@@ -82,45 +88,21 @@ const StudentDashboard = () => {
     if (isFocused) loadProfilePic();
   }, [isFocused, loadProfilePic]);
 
-  // Show network error modal only once per offline session in Dashboard
+  // Network monitoring
   useEffect(() => {
-    const checkAndShowNetworkError = async () => {
-      if (!isFocused || isConnected) return;
-      
-      // Check if we've already shown the modal in this offline session
-      const hasShownKey = 'dashboard_offline_modal_shown';
-      try {
-        const hasShown = await AsyncStorage.getItem(hasShownKey);
-        if (hasShown) return; // Already shown in this session
-      } catch {}
-      
-      // Show the modal
-      const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: 'You are currently offline' });
-      setNetworkErrorTitle(errorInfo.title);
-      setNetworkErrorMessage(errorInfo.message);
-      setNetworkErrorColor(errorInfo.color);
-      setNetworkErrorVisible(true);
-      
-      // Mark as shown
-      try {
-        await AsyncStorage.setItem(hasShownKey, 'true');
-      } catch {}
-      
-      // Auto-close after 3 seconds
-      setTimeout(() => {
-        setNetworkErrorVisible(false);
-      }, 3000);
-    };
-    
-    checkAndShowNetworkError();
-  }, [isFocused, isConnected]);
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!connected);
+    });
 
-  // Clear the "has shown" flag when connection is restored
-  useEffect(() => {
-    if (isConnected) {
-      AsyncStorage.removeItem('dashboard_offline_modal_shown').catch(() => {});
-    }
-  }, [isConnected]);
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!connected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // Listen for avatar changes from Profile screen
   useEffect(() => {
@@ -818,6 +800,8 @@ const StudentDashboard = () => {
             <View style={{ flex: 1, backgroundColor: '#FFFFFF', minHeight: 200 }} />
           )}
         </ScrollView>
+        
+        <OfflineBanner visible={showOfflineBanner} />
       </View>
 
       {/* QR Request Modal */}
@@ -928,17 +912,18 @@ const StudentDashboard = () => {
         </View>
       </Modal>
 
-      {/* Network Error Modal - Only shown once in Dashboard */}
-      <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
+      {/* Error Feedback Modal */}
+      <Modal transparent animationType="fade" visible={errorModalVisible} onRequestClose={() => setErrorModalVisible(false)}>
         <View style={styles.modalOverlayCenter}>
           <View style={styles.fbModalCard}>
             <View style={styles.fbModalContent}>
-              <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
-              {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
+              <Text style={[styles.fbModalTitle, { color: '#8B0000' }]}>No internet Connection</Text>
+              <Text style={styles.fbModalMessage}>{errorModalMessage}</Text>
             </View>
           </View>
         </View>
       </Modal>
+
     </>
   );
 };
@@ -1229,7 +1214,6 @@ const styles = StyleSheet.create({
 });
 
 export default StudentDashboard;
-
 
 
 

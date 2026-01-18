@@ -19,6 +19,8 @@ import { db } from '../../utils/firebaseConfig';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NetworkContext } from '../../contexts/NetworkContext';
 import { cacheMessages, getCachedMessages, cacheLinkedStudents, getCachedLinkedStudents } from '../../offline/storage';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 import { wp, hp, RFValue, isSmallDevice, isTablet } from '../../utils/responsive';
 
 const { width } = Dimensions.get('window');
@@ -45,6 +47,8 @@ function Messages() {
   const lastMessagesRef = useRef({});
   const manuallyReadRef = useRef({});
   const [manualReadLoaded, setManualReadLoaded] = useState(false);
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
   // Network error modals removed - following same pattern as Student Messages.js
   // Local notification dedupe removed; notifications now handled globally
 
@@ -53,6 +57,24 @@ function Messages() {
   useEffect(() => { readReceiptsRef.current = readReceipts; }, [readReceipts]);
   useEffect(() => { lastMessagesRef.current = lastMessages; }, [lastMessages]);
   useEffect(() => { manuallyReadRef.current = manuallyRead; }, [manuallyRead]);
+
+  // Network monitoring
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // Load persisted manual-read state
   useEffect(() => {
@@ -149,11 +171,61 @@ function Messages() {
     // Load cached data first, then conditionally set up listeners
     (async () => {
       const cachedLoaded = await loadCachedData();
-      // If cached data was loaded and we're offline, don't set up Firestore listeners
-      if (cachedLoaded) return;
+      // If cached data was loaded and we're offline, show cached data but don't set up Firestore listeners
+      if (cachedLoaded && !isConnected) {
+        // Ensure we have cached lastMessages loaded for display
+        try {
+          const cachedLastMessages = await getCachedMessages(user.uid);
+          if (cachedLastMessages && typeof cachedLastMessages === 'object') {
+            // Ensure timestamp values are properly formatted
+            const processedLastMessages = {};
+            Object.keys(cachedLastMessages).forEach(linkId => {
+              const msg = cachedLastMessages[linkId];
+              if (msg && typeof msg === 'object') {
+                processedLastMessages[linkId] = {
+                  ...msg,
+                  createdAtMs: typeof msg.createdAtMs === 'number' ? msg.createdAtMs : 
+                               (msg.createdAt?.toMillis ? msg.createdAt.toMillis() : 
+                                (typeof msg.createdAt === 'number' ? msg.createdAt : null)),
+                };
+              }
+            });
+            setLastMessages(processedLastMessages);
+            console.log('✅ Last messages loaded from cache for offline viewing');
+          }
+        } catch (error) {
+          console.log('Error loading cached last messages:', error);
+        }
+        return;
+      }
 
       // Only set up Firestore listeners if online
-      if (!isConnected) return;
+      if (!isConnected) {
+        // Try one more time to load cached lastMessages
+        try {
+          const cachedLastMessages = await getCachedMessages(user.uid);
+          if (cachedLastMessages && typeof cachedLastMessages === 'object') {
+            // Ensure timestamp values are properly formatted
+            const processedLastMessages = {};
+            Object.keys(cachedLastMessages).forEach(linkId => {
+              const msg = cachedLastMessages[linkId];
+              if (msg && typeof msg === 'object') {
+                processedLastMessages[linkId] = {
+                  ...msg,
+                  createdAtMs: typeof msg.createdAtMs === 'number' ? msg.createdAtMs : 
+                               (msg.createdAt?.toMillis ? msg.createdAt.toMillis() : 
+                                (typeof msg.createdAt === 'number' ? msg.createdAt : null)),
+                };
+              }
+            });
+            setLastMessages(processedLastMessages);
+            console.log('✅ Last messages loaded from cache for offline viewing');
+          }
+        } catch (error) {
+          console.log('Error loading cached last messages:', error);
+        }
+        return;
+      }
 
       const canonicalId = String(user?.parentId || '').trim();
       const qUid = query(
@@ -198,7 +270,21 @@ function Messages() {
       try {
         const cachedData = await getCachedMessages(user.uid);
         if (cachedData && typeof cachedData === 'object') {
-          setLastMessages(cachedData);
+          // Ensure timestamp values are properly formatted
+          const processedLastMessages = {};
+          Object.keys(cachedData).forEach(linkId => {
+            const msg = cachedData[linkId];
+            if (msg && typeof msg === 'object') {
+              processedLastMessages[linkId] = {
+                ...msg,
+                // Ensure createdAtMs is a number
+                createdAtMs: typeof msg.createdAtMs === 'number' ? msg.createdAtMs : 
+                             (msg.createdAt?.toMillis ? msg.createdAt.toMillis() : 
+                              (typeof msg.createdAt === 'number' ? msg.createdAt : null)),
+              };
+            }
+          });
+          setLastMessages(processedLastMessages);
           console.log('✅ Last messages loaded from cache in mergeStudents');
           // If offline, use cached data and return early (don't set up listeners)
           if (!isConnected) {
@@ -500,6 +586,8 @@ function Messages() {
           </>
         )}
       </View>
+      
+      <OfflineBanner visible={showOfflineBanner} />
     </View>
   );
 }

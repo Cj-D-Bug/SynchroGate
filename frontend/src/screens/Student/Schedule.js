@@ -14,6 +14,8 @@ import { NetworkContext } from '../../contexts/NetworkContext';
 import { isFirestoreConnectionError } from '../../utils/firestoreErrorHandler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { cacheSchedule, getCachedSchedule } from '../../offline/storage';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const DARK_GREEN = '#064E3B';
@@ -82,6 +84,7 @@ const GraphSchedule = ({ studentId: propStudentId }) => {
   const [isLinkedToParent, setIsLinkedToParent] = useState(false);
   const [permissionExpiry, setPermissionExpiry] = useState(null);
   const permissionExpiryNotifiedRef = useRef(false);
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
 
   const showFeedback = ({
     title = 'Success',
@@ -182,6 +185,14 @@ const GraphSchedule = ({ studentId: propStudentId }) => {
     const interval = setInterval(updateTime, 60000);
     
     return () => clearInterval(interval);
+  }, []);
+
+  // Monitor network connectivity for offline banner
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      setShowOfflineBanner(!state.isConnected);
+    });
+    return () => unsubscribe();
   }, []);
 
   const fetchSchedule = async () => {
@@ -2544,7 +2555,7 @@ const GraphSchedule = ({ studentId: propStudentId }) => {
         <View style={styles.modalOverlayCenter}>
           <View style={styles.fbModalCard}>
             <View style={styles.fbModalContent}>
-              <Text style={[styles.fbModalTitle, { color: '#DC2626' }]}>Error</Text>
+              <Text style={[styles.fbModalTitle, { color: '#8B0000' }]}>No internet Connection</Text>
               <Text style={styles.fbModalMessage}>{errorModalMessage}</Text>
             </View>
           </View>
@@ -2650,29 +2661,58 @@ const GraphSchedule = ({ studentId: propStudentId }) => {
                       return;
                     }
 
+                    // Check for existing pending schedule_permission_request in any linked parent's alerts
+                    const resolveParentDocId = async (parentUid) => {
+                      try {
+                        const raw = String(parentUid || '').trim();
+                        if (raw && raw.includes('-')) return raw;
+                        try {
+                          const qSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', raw), where('role', '==', 'parent')));
+                          if (!qSnap.empty) {
+                            const data = qSnap.docs[0].data() || {};
+                            const cand = String(data.parentId || data.parentIdCanonical || '').trim();
+                            if (cand && cand.includes('-')) return cand;
+                          }
+                        } catch {}
+                        return raw;
+                      } catch {
+                        return String(parentUid || '').trim();
+                      }
+                    };
+
+                    // Check all linked parents for pending requests
+                    let hasPendingRequest = false;
+                    for (const link of allLinks) {
+                      const parentDocId = await resolveParentDocId(link.parentId);
+                      const parentAlertsRef = doc(db, 'parent_alerts', parentDocId);
+                      const parentSnap = await getDoc(parentAlertsRef);
+                      if (parentSnap.exists()) {
+                        const existing = Array.isArray(parentSnap.data()?.items) ? parentSnap.data().items : [];
+                        // Check if there's a pending schedule_permission_request for this student
+                        const pendingRequest = existing.find(it => 
+                          it?.type === 'schedule_permission_request' && 
+                          it?.studentId === user.studentId &&
+                          it?.status === 'unread'
+                        );
+                        if (pendingRequest) {
+                          hasPendingRequest = true;
+                          break;
+                        }
+                      }
+                    }
+
+                    if (hasPendingRequest) {
+                      showErrorModal('You already have a pending permission request. Please wait for a response before sending a new request.');
+                      setPermissionRequestVisible(false);
+                      return;
+                    }
+
                     // Send notification to each linked parent
                     const studentName = `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || 'Student';
                     const uniqueSuffix = `${Date.now()}_${Math.floor(Math.random()*1000000)}`;
                     
+                    // Reuse resolveParentDocId function defined above
                     for (const link of allLinks) {
-                      const resolveParentDocId = async (parentUid) => {
-                        try {
-                          const raw = String(parentUid || '').trim();
-                          if (raw && raw.includes('-')) return raw;
-                          try {
-                            const qSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', raw), where('role', '==', 'parent')));
-                            if (!qSnap.empty) {
-                              const data = qSnap.docs[0].data() || {};
-                              const cand = String(data.parentId || data.parentIdCanonical || '').trim();
-                              if (cand && cand.includes('-')) return cand;
-                            }
-                          } catch {}
-                          return raw;
-                        } catch {
-                          return String(parentUid || '').trim();
-                        }
-                      };
-
                       const parentDocId = await resolveParentDocId(link.parentId);
                       const notifItem = {
                         id: `sched_perm_${user.studentId}_${uniqueSuffix}`,
@@ -2836,7 +2876,7 @@ const GraphSchedule = ({ studentId: propStudentId }) => {
         </View>
       </Modal>
 
-
+      <OfflineBanner visible={showOfflineBanner} />
     </>
   );
 };

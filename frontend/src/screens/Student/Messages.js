@@ -21,6 +21,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NetworkContext } from '../../contexts/NetworkContext';
 import { cacheMessages, getCachedMessages, cacheConversationMessages, getCachedConversationMessages, getCachedLinkedParents, cacheLinkedParents } from '../../offline/storage';
 import { wp, hp, RFValue, isSmallDevice, isTablet } from '../../utils/responsive';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 
 const { width } = Dimensions.get('window');
 
@@ -49,6 +51,9 @@ function Messages() {
   const [manualReadLoaded, setManualReadLoaded] = useState(false);
   const studentConvUnsubsRef = useRef({});
   const studentReadUnsubsRef = useRef({});
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [errorModalVisible, setErrorModalVisible] = useState(false);
+  const [errorModalMessage, setErrorModalMessage] = useState('');
 
   const storageKey = useMemo(() => (user?.uid ? `studentManualRead_${user.uid}` : null), [user?.uid]);
 
@@ -98,6 +103,20 @@ function Messages() {
     setLogoutVisible(false);
   };
 
+  // Monitor network connectivity for offline banner
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      setShowOfflineBanner(!state.isConnected);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const showErrorModal = (message) => {
+    setErrorModalMessage(message);
+    setErrorModalVisible(true);
+    setTimeout(() => setErrorModalVisible(false), 3000);
+  };
+
   // Load linked parents for this student (query both studentId and studentIdNumber)
   useEffect(() => {
     if (!user?.uid) { setLinkedParents([]); setLoadingLinks(false); return; }
@@ -139,11 +158,61 @@ function Messages() {
     // Load cached data first, then conditionally set up listeners
     (async () => {
       const cachedLoaded = await loadCachedData();
-      // If cached data was loaded and we're offline, don't set up Firestore listeners
-      if (cachedLoaded) return;
+      // If cached data was loaded and we're offline, show cached data but don't set up Firestore listeners
+      if (cachedLoaded && !isConnected) {
+        // Ensure we have cached lastMessages loaded for display
+        try {
+          const cachedLastMessages = await getCachedMessages(user.uid);
+          if (cachedLastMessages && typeof cachedLastMessages === 'object') {
+            // Ensure timestamp values are properly formatted
+            const processedLastMessages = {};
+            Object.keys(cachedLastMessages).forEach(linkId => {
+              const msg = cachedLastMessages[linkId];
+              if (msg && typeof msg === 'object') {
+                processedLastMessages[linkId] = {
+                  ...msg,
+                  createdAtMs: typeof msg.createdAtMs === 'number' ? msg.createdAtMs : 
+                               (msg.createdAt?.toMillis ? msg.createdAt.toMillis() : 
+                                (typeof msg.createdAt === 'number' ? msg.createdAt : null)),
+                };
+              }
+            });
+            setLastMessages(processedLastMessages);
+            console.log('✅ Last messages loaded from cache for offline viewing');
+          }
+        } catch (error) {
+          console.log('Error loading cached last messages:', error);
+        }
+        return;
+      }
       
       // Only set up Firestore listeners if online
-      if (!isConnected) return;
+      if (!isConnected) {
+        // Try one more time to load cached lastMessages
+        try {
+          const cachedLastMessages = await getCachedMessages(user.uid);
+          if (cachedLastMessages && typeof cachedLastMessages === 'object') {
+            // Ensure timestamp values are properly formatted
+            const processedLastMessages = {};
+            Object.keys(cachedLastMessages).forEach(linkId => {
+              const msg = cachedLastMessages[linkId];
+              if (msg && typeof msg === 'object') {
+                processedLastMessages[linkId] = {
+                  ...msg,
+                  createdAtMs: typeof msg.createdAtMs === 'number' ? msg.createdAtMs : 
+                               (msg.createdAt?.toMillis ? msg.createdAt.toMillis() : 
+                                (typeof msg.createdAt === 'number' ? msg.createdAt : null)),
+                };
+              }
+            });
+            setLastMessages(processedLastMessages);
+            console.log('✅ Last messages loaded from cache for offline viewing');
+          }
+        } catch (error) {
+          console.log('Error loading cached last messages:', error);
+        }
+        return;
+      }
       
       // Get student identifiers (both UID and student ID number)
       const getStudentIdentifiers = () => {
@@ -293,7 +362,21 @@ function Messages() {
       try {
         const cachedData = await getCachedMessages(user.uid);
         if (cachedData && typeof cachedData === 'object') {
-          setLastMessages(cachedData);
+          // Ensure timestamp values are properly formatted
+          const processedLastMessages = {};
+          Object.keys(cachedData).forEach(linkId => {
+            const msg = cachedData[linkId];
+            if (msg && typeof msg === 'object') {
+              processedLastMessages[linkId] = {
+                ...msg,
+                // Ensure createdAtMs is a number
+                createdAtMs: typeof msg.createdAtMs === 'number' ? msg.createdAtMs : 
+                             (msg.createdAt?.toMillis ? msg.createdAt.toMillis() : 
+                              (typeof msg.createdAt === 'number' ? msg.createdAt : null)),
+              };
+            }
+          });
+          setLastMessages(processedLastMessages);
           console.log('✅ Last messages loaded from cache in updateCombinedResults');
           // If offline, use cached data and return early (don't set up listeners)
           if (!isConnected) {
@@ -485,6 +568,13 @@ function Messages() {
   const sendMessage = async () => {
     const text = String(input || '').trim();
     if (!text || !conversationId || !user?.uid) return;
+    
+    // Check internet connection before proceeding
+    if (!isConnected) {
+      showErrorModal('No internet connection. Please check your network and try again.');
+      return;
+    }
+    
     try {
       setSending(true);
       await ensureConversation();
@@ -666,6 +756,18 @@ function Messages() {
           </>
         )}
       </View>
+      {/* Error Feedback Modal */}
+      <Modal transparent animationType="fade" visible={errorModalVisible} onRequestClose={() => setErrorModalVisible(false)}>
+        <View style={styles.modalOverlayCenter}>
+          <View style={styles.fbModalCard}>
+            <View style={styles.fbModalContent}>
+              <Text style={[styles.fbModalTitle, { color: '#8B0000' }]}>No internet Connection</Text>
+              <Text style={styles.fbModalMessage}>{errorModalMessage}</Text>
+            </View>
+          </View>
+        </View>
+      </Modal>
+      <OfflineBanner visible={showOfflineBanner} />
     </View>
   );
 }
@@ -727,7 +829,44 @@ const styles = StyleSheet.create({
   infoIconWrap: { width: wp(10), height: wp(10), borderRadius: wp(5), backgroundColor: '#F0F9FF', alignItems: 'center', justifyContent: 'center', marginRight: wp(3) },
   infoTitle: { fontSize: RFValue(14), fontWeight: '700', color: '#111827', marginBottom: hp(0.5) },
   infoSub: { fontSize: RFValue(13), color: '#6B7280' },
+  // Facebook-style modal styles
+  modalOverlayCenter: { 
+    flex: 1, 
+    backgroundColor: 'rgba(0,0,0,0.5)', 
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20
+  },
+  fbModalCard: {
+    width: '85%',
+    maxWidth: 400,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 8,
+    elevation: 5,
+    minHeight: 120,
+    justifyContent: 'space-between',
+  },
+  fbModalContent: {
+    flex: 1,
+  },
+  fbModalTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#050505',
+    marginBottom: 12,
+    textAlign: 'left',
+  },
+  fbModalMessage: {
+    fontSize: 15,
+    color: '#65676B',
+    textAlign: 'left',
+    lineHeight: 20,
+  },
 });
 
 export default Messages;
-

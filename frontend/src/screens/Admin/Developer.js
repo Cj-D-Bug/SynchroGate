@@ -8,6 +8,9 @@ import { BASE_URL } from '../../utils/apiConfig';
 import { collection, query, where, getDocs, collectionGroup } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
 import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
+import { fetchWithCache, isNetworkError, getCacheData, setCacheData } from '../../utils/offlineCache';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 // Removed: sendAlertPushNotification import - backend handles all push notifications automatically
 
 const Developer = () => {
@@ -39,10 +42,7 @@ const Developer = () => {
   const [feedbackVisible, setFeedbackVisible] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [feedbackSuccess, setFeedbackSuccess] = useState(false);
-  const [networkErrorVisible, setNetworkErrorVisible] = useState(false);
-  const [networkErrorTitle, setNetworkErrorTitle] = useState('');
-  const [networkErrorMessage, setNetworkErrorMessage] = useState('');
-  const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
 
   const apiEndpoints = [
     { name: 'Health Check', endpoint: '/', method: 'GET', requiresAuth: false },
@@ -51,6 +51,22 @@ const Developer = () => {
     { name: 'Logs', endpoint: '/api/logs', method: 'GET', requiresAuth: true },
   ];
 
+
+  // Monitor network connectivity
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const isConnected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!isConnected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const isConnected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!isConnected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     if (isFocused) {
@@ -101,38 +117,67 @@ const Developer = () => {
   const fetchDashboardData = async () => {
     setLoading(true);
     try {
+      // Check network status first
+      const netState = await NetInfo.fetch();
+      const isOnline = netState.isConnected && netState.isInternetReachable;
+      
+      if (!isOnline) {
+        // If offline, try to load from cache
+        const cachedData = await getCacheData('developer_dashboard_data');
+        if (cachedData) {
+          setActiveUsers(cachedData.activeUsers || 0);
+          setErrorCount(cachedData.errorCount || 0);
+          setApiResponseTime(cachedData.apiResponseTime || 0);
+          setSystemHealth(cachedData.systemHealth || 'critical');
+          console.log('Loaded dashboard data from offline cache');
+          return;
+        }
+      }
+      
       const [usersSnap, errorSnap] = await Promise.all([
         getDocs(collection(db, 'users')),
         getDocs(query(collection(db, 'systemLogs'), where('level', '==', 'error')))
       ]);
       
-      setActiveUsers(usersSnap.size);
-      setErrorCount(errorSnap.size);
+      const activeUsersCount = usersSnap.size;
+      const errorCountValue = errorSnap.size;
+      
+      setActiveUsers(activeUsersCount);
+      setErrorCount(errorCountValue);
       
       const startTime = Date.now();
       await getDocs(collection(db, 'users'));
       const responseTime = Date.now() - startTime;
       setApiResponseTime(responseTime);
       
-      if (errorSnap.size > 10 || responseTime > 2000) {
-        setSystemHealth('warning');
-      } else if (errorSnap.size > 20 || responseTime > 5000) {
-        setSystemHealth('critical');
-      } else {
-        setSystemHealth('healthy');
+      let health = 'healthy';
+      if (errorCountValue > 10 || responseTime > 2000) {
+        health = 'warning';
+      } else if (errorCountValue > 20 || responseTime > 5000) {
+        health = 'critical';
       }
+      setSystemHealth(health);
+      
+      // Cache the data
+      await setCacheData('developer_dashboard_data', {
+        activeUsers: activeUsersCount,
+        errorCount: errorCountValue,
+        apiResponseTime: responseTime,
+        systemHealth: health,
+      });
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
-      // Only show network error modal for actual network errors
-      if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
+      // Try to load from cache as last resort
+      const cachedData = await getCacheData('developer_dashboard_data');
+      if (cachedData) {
+        setActiveUsers(cachedData.activeUsers || 0);
+        setErrorCount(cachedData.errorCount || 0);
+        setApiResponseTime(cachedData.apiResponseTime || 0);
+        setSystemHealth(cachedData.systemHealth || 'critical');
+        console.log('Loaded dashboard data from cache after error');
+      } else {
+        setSystemHealth('critical');
       }
-      setSystemHealth('critical');
     } finally {
       setLoading(false);
     }
@@ -157,14 +202,8 @@ const Developer = () => {
       });
     } catch (error) {
       console.error('Error fetching data stats:', error);
-      // Only show network error modal for actual network errors
-      if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
+      if (isNetworkError(error)) {
+        setShowOfflineBanner(true);
       }
     } finally {
       setLoading(false);
@@ -323,14 +362,8 @@ const Developer = () => {
       setFeedbackVisible(true);
     } catch (error) {
       console.error('Export error:', error);
-      // Only show network error modal for actual network errors
-      if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
+      if (isNetworkError(error)) {
+        setShowOfflineBanner(true);
       } else {
         setFeedbackMessage(`Export failed: ${error.message}`);
         setFeedbackSuccess(false);
@@ -376,6 +409,7 @@ const Developer = () => {
 
   return (
     <SafeAreaView style={styles.wrapper} edges={['left', 'right']}>
+      <OfflineBanner visible={showOfflineBanner} />
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* Dashboard Section */}
         <View style={styles.section}>
@@ -661,26 +695,6 @@ const Developer = () => {
               <TouchableOpacity style={[styles.modalButton, styles.modalButtonDanger]} onPress={confirmLogout}>
                 <Text style={[styles.modalButtonText, styles.modalButtonDangerText]}>Logout</Text>
               </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Network Error Modal */}
-      <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
-        <View style={styles.modalOverlayCenter}>
-          <View style={styles.fbModalCard}>
-            <View style={styles.fbModalContent}>
-              <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
-              {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
-              <View style={styles.fbModalButtonContainer}>
-                <TouchableOpacity
-                  style={[styles.fbModalConfirmButton, { backgroundColor: networkErrorColor }]}
-                  onPress={() => setNetworkErrorVisible(false)}
-                >
-                  <Text style={styles.fbModalConfirmText}>OK</Text>
-                </TouchableOpacity>
-              </View>
             </View>
           </View>
         </View>

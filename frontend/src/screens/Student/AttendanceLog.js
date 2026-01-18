@@ -24,6 +24,8 @@ import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/ne
 // Removed unused AttendanceCard import
 import useNetworkMonitor from '../../hooks/useNetworkMonitor';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 import { wp, hp, fontSizes } from '../../utils/responsive';
 import avatarEventEmitter from '../../utils/avatarEventEmitter';
 import { cacheAttendanceLogs, getCachedAttendanceLogs } from '../../offline/storage';
@@ -74,6 +76,7 @@ const AttendanceLog = () => {
   const [networkErrorTitle, setNetworkErrorTitle] = useState('');
   const [networkErrorMessage, setNetworkErrorMessage] = useState('');
   const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
 
   // Load profile picture - using same key as Profile.js
   const loadProfilePic = React.useCallback(async () => {
@@ -327,6 +330,14 @@ const AttendanceLog = () => {
     }, [navigation])
   );
 
+  // Monitor network connectivity for offline banner
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      setShowOfflineBanner(!state.isConnected);
+    });
+    return () => unsubscribe();
+  }, []);
+
   const formatDate = (timestamp) => {
     try {
       if (!timestamp) return 'Invalid Date';
@@ -576,6 +587,7 @@ const AttendanceLog = () => {
       >
         <Text style={styles.toggleAllButtonText}>{showAllEntries ? 'See today' : 'All Entries'}</Text>
       </TouchableOpacity>
+      <OfflineBanner visible={showOfflineBanner} />
     </View>
   );
 };
@@ -986,7 +998,6 @@ const styles = StyleSheet.create({
 });
 
 export default AttendanceLog;
-
 
 
 

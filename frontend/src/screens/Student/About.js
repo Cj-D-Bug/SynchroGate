@@ -1,5 +1,5 @@
 
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useEffect } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,8 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { AuthContext } from '../../contexts/AuthContext';
 import { STUDENT_TAB_BAR_STYLE } from '../../navigation/tabStyles';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 
 const AboutLogo = require('../../assets/logo.png');
 
@@ -23,6 +25,7 @@ const About = () => {
   const navigation = useNavigation();
   const { logout } = useContext(AuthContext);
   const [logoutVisible, setLogoutVisible] = useState(false);
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
 
   const handleLogout = () => setLogoutVisible(true);
   const confirmLogout = async () => {
@@ -39,6 +42,14 @@ const About = () => {
       return () => {};
     }, [navigation])
   );
+
+  // Monitor network connectivity for offline banner
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      setShowOfflineBanner(!state.isConnected);
+    });
+    return () => unsubscribe();
+  }, []);
 
   return (
     <View style={styles.wrapper}>
@@ -146,6 +157,7 @@ const About = () => {
           </View>
         </View>
       </Modal>
+      <OfflineBanner visible={showOfflineBanner} />
     </View>
   );
 };

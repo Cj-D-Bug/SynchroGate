@@ -9,7 +9,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import avatarEventEmitter from '../../utils/avatarEventEmitter';
 import { query, collection, where, getDocs } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
-import { getNetworkErrorMessage } from '../../utils/networkErrorHandler';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 
 export default function Profile({ navigation }) {
   const { user, loading } = useContext(AuthContext);
@@ -22,10 +23,8 @@ export default function Profile({ navigation }) {
   const [modalVisible, setModalVisible] = useState(false);
   const [activeType, setActiveType] = useState(null);
   const [linkedStudents, setLinkedStudents] = useState([]);
-  const [networkErrorVisible, setNetworkErrorVisible] = useState(false);
-  const [networkErrorTitle, setNetworkErrorTitle] = useState('');
-  const [networkErrorMessage, setNetworkErrorMessage] = useState('');
-  const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -39,6 +38,24 @@ export default function Profile({ navigation }) {
       };
     }, [navigation])
   );
+
+  // Network monitoring
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     try { console.log('ParentProfile - User data:', user); } catch {}
@@ -91,15 +108,6 @@ export default function Profile({ navigation }) {
         }
       } catch (error) {
         console.error('Error checking linked students:', error);
-        // Only show network error modal for actual network errors
-        if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-          const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-          setNetworkErrorTitle(errorInfo.title);
-          setNetworkErrorMessage(errorInfo.message);
-          setNetworkErrorColor(errorInfo.color);
-          setNetworkErrorVisible(true);
-          setTimeout(() => setNetworkErrorVisible(false), 5000);
-        }
         console.log("Error checking linked status:", error);
         setLinkedStudents([]);
       }
@@ -314,17 +322,7 @@ export default function Profile({ navigation }) {
         </View>
       </Modal>
 
-      {/* Network Error Modal */}
-      <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
-        <View style={styles.modalOverlayCenter}>
-          <View style={styles.fbModalCard}>
-            <View style={styles.fbModalContent}>
-              <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
-              {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <OfflineBanner visible={showOfflineBanner} />
     </View>
   );
 }
@@ -429,6 +427,5 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
 });
-
 
 

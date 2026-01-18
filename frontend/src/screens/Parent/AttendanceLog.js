@@ -19,10 +19,12 @@ import { AuthContext } from '../../contexts/AuthContext';
 import { NetworkContext } from '../../contexts/NetworkContext';
 import { collection, query, where, orderBy, onSnapshot, getDocs, doc, getDoc } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
-import { cacheAttendanceLogs, getCachedAttendanceLogs } from '../../offline/storage';
+import { cacheAttendanceLogs, getCachedAttendanceLogs, getCachedLinkedStudents, cacheLinkedStudents } from '../../offline/storage';
 import useNetworkMonitor from '../../hooks/useNetworkMonitor';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { wp, hp, fontSizes } from '../../utils/responsive';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 
 const { width } = Dimensions.get('window');
 
@@ -71,6 +73,7 @@ const AttendanceLog = () => {
 
   const [logoutVisible, setLogoutVisible] = useState(false);
   const [showAllEntries, setShowAllEntries] = useState(false);
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
 
   // Load profile picture
   useEffect(() => {
@@ -95,6 +98,34 @@ const AttendanceLog = () => {
         setLinkedStudents([]); 
         setSelectedStudentId(null); 
         return; 
+      }
+      
+      // Always try to load cached data first (for immediate display)
+      try {
+        const cachedLinkedStudents = await getCachedLinkedStudents(user.uid);
+        if (cachedLinkedStudents && Array.isArray(cachedLinkedStudents) && cachedLinkedStudents.length > 0) {
+          const formatted = cachedLinkedStudents.map(s => ({
+            id: s.studentId || s.id,
+            studentIdNumber: s.studentIdNumber || s.studentId || '',
+            name: s.studentName || s.firstName || 'Student',
+            relationship: s.relationship || '',
+          }));
+          setLinkedStudents(formatted);
+          if (formatted.length > 0) {
+            const firstStudent = formatted[0];
+            const attendanceDocId = firstStudent.studentIdNumber || firstStudent.id;
+            setSelectedStudentId(firstStudent.id);
+            setSelectedStudentName(firstStudent.name || 'Student');
+            setSelectedStudentDocId(attendanceDocId);
+            console.log('✅ Linked students loaded from cache');
+          }
+          // If offline, use cached data and return early
+          if (!isConnected) {
+            return;
+          }
+        }
+      } catch (error) {
+        console.log('Error loading cached linked students:', error);
       }
       
       // Only fetch from Firestore if online
@@ -159,6 +190,20 @@ const AttendanceLog = () => {
           setSelectedStudentName(firstStudent.name || 'Student');
           setSelectedStudentDocId(attendanceDocId);
           console.log('📊 PARENT ATTENDANCE: Using attendanceDocId:', attendanceDocId, 'studentIdNumber:', firstStudent.studentIdNumber, 'id:', firstStudent.id);
+        }
+        
+        // Cache linked students for offline access
+        try {
+          const studentsForCache = students.map(s => ({
+            studentId: s.id,
+            studentIdNumber: s.studentIdNumber,
+            studentName: s.name,
+            relationship: s.relationship,
+            linkedAt: new Date().toISOString()
+          }));
+          await cacheLinkedStudents(user.uid, studentsForCache);
+        } catch (error) {
+          console.log('Error caching linked students:', error);
         }
       } catch (error) {
         console.error('Error loading linked students:', error);
@@ -237,13 +282,14 @@ const AttendanceLog = () => {
       return; 
     }
     
-    // Try to load from cache first (works offline)
+    // Always try to load from cache first (for immediate display)
     const loadCachedData = async () => {
       try {
         const cachedData = await getCachedAttendanceLogs(selectedStudentDocId);
         if (cachedData && Array.isArray(cachedData.logs)) {
           setLogs(cachedData.logs || []);
           calculateStats(cachedData.logs || []);
+          console.log('✅ Attendance logs loaded from cache');
           // If offline, use cached data and return early
           if (!isConnected) {
             console.log('📴 Offline mode - using cached attendance logs');
@@ -310,6 +356,22 @@ const AttendanceLog = () => {
       }
     };
   }, [selectedStudentDocId, isConnected]);
+
+  // Network monitoring
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!connected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!connected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // Re-render at midnight to clear today's activity section (no deletion in Firestore)
   useEffect(() => {
@@ -730,6 +792,8 @@ const AttendanceLog = () => {
         <Text style={styles.toggleAllButtonText}>{showAllEntries ? 'See today' : 'All Entries'}</Text>
       </TouchableOpacity>
       )}
+      
+      <OfflineBanner visible={showOfflineBanner} />
     </View>
   );
 };
@@ -1178,6 +1242,5 @@ const styles = StyleSheet.create({
 });
 
 export default AttendanceLog;
-
 
 

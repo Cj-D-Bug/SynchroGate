@@ -31,12 +31,13 @@ import {
   onSnapshot 
 } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
-import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
 import { deleteConversationOnUnlink, deleteAllStudentToStudentConversations } from '../../utils/conversationUtils';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import avatarEventEmitter from '../../utils/avatarEventEmitter';
 import { cacheLinkedParents, getCachedLinkedParents } from '../../offline/storage';
 import { NetworkContext } from '../../contexts/NetworkContext';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 // Removed: sendAlertPushNotification import - backend handles all push notifications automatically
 
 const { width, height } = Dimensions.get('window');
@@ -81,10 +82,8 @@ function LinkStudents() {
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [feedbackSuccess, setFeedbackSuccess] = useState(true);
   const [feedbackTitle, setFeedbackTitle] = useState('');
-  const [networkErrorVisible, setNetworkErrorVisible] = useState(false);
-  const [networkErrorTitle, setNetworkErrorTitle] = useState('');
-  const [networkErrorMessage, setNetworkErrorMessage] = useState('');
-  const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
   const [unlinkConfirmVisible, setUnlinkConfirmVisible] = useState(false);
   const [unlinkStudentData, setUnlinkStudentData] = useState(null);
   const [unlinking, setUnlinking] = useState(false);
@@ -170,6 +169,24 @@ function LinkStudents() {
       avatarEventEmitter.off('avatarChanged', handleAvatarChange);
     };
   }, [user?.uid, loadProfilePic]);
+
+  // Network monitoring
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // sidebar removed
 
@@ -731,15 +748,6 @@ function LinkStudents() {
         }
       } catch (error) {
         console.log('Error fetching parent data:', error);
-        // Only show network error modal for actual network errors
-        if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-          const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-          setNetworkErrorTitle(errorInfo.title);
-          setNetworkErrorMessage(errorInfo.message);
-          setNetworkErrorColor(errorInfo.color);
-          setNetworkErrorVisible(true);
-          setTimeout(() => setNetworkErrorVisible(false), 5000);
-        }
       } finally {
         setStudentInfoLoading(false);
       }
@@ -1004,6 +1012,19 @@ function LinkStudents() {
         // Continue with the request if check fails (non-blocking)
       }
       
+      // Check internet connection before proceeding
+      if (!isConnected) {
+        setFeedbackSuccess(false);
+        setFeedbackTitle('No Internet Connection');
+        setFeedbackMessage('Unable to link parent. Please check your internet connection and try again.');
+        setFeedbackVisible(true);
+        setTimeout(() => {
+          setFeedbackVisible(false);
+          resetToNormalState();
+        }, 3000);
+        return;
+      }
+      
       setLinkingStudent(true);
       // Prevent duplicate pending
       const dupQueryRef = query(
@@ -1155,25 +1176,15 @@ function LinkStudents() {
       }, 3000);
     } catch (error) {
       console.error('Error sending link request:', error);
-      // Only show network error modal for actual network errors
-      if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      } else {
-        setLinkStudentConfirmVisible(false);
-        setFeedbackSuccess(false);
-        setFeedbackTitle('Error');
-        setFeedbackMessage(error.message || 'Failed to send request.');
-        setFeedbackVisible(true);
-        setTimeout(() => {
-          setFeedbackVisible(false);
-          resetToNormalState();
-        }, 3000);
-      }
+      setLinkStudentConfirmVisible(false);
+      setFeedbackSuccess(false);
+      setFeedbackTitle('Error');
+      setFeedbackMessage(error.message || 'Failed to send request.');
+      setFeedbackVisible(true);
+      setTimeout(() => {
+        setFeedbackVisible(false);
+        resetToNormalState();
+      }, 3000);
     } finally { setLinkingStudent(false); }
   };
 
@@ -1338,28 +1349,18 @@ function LinkStudents() {
       }, 3000);
     } catch (error) {
       console.error('Error unlinking parent:', error);
-      // Only show network error modal for actual network errors
-      if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      } else {
-        setFeedbackSuccess(false);
-        setFeedbackTitle('Error');
-        setFeedbackMessage(error.message || 'Failed to unlink student.');
-        // Close confirm and any info modal immediately upon failure as well
-        setUnlinkConfirmVisible(false);
-        setStudentInfoVisible(false);
-        loadLinkedStudents();
-        setFeedbackVisible(true);
-        setTimeout(() => {
-          setFeedbackVisible(false);
-          resetToNormalState();
-        }, 3000);
-      }
+      setFeedbackSuccess(false);
+      setFeedbackTitle('Error');
+      setFeedbackMessage(error.message || 'Failed to unlink student.');
+      // Close confirm and any info modal immediately upon failure as well
+      setUnlinkConfirmVisible(false);
+      setStudentInfoVisible(false);
+      loadLinkedStudents();
+      setFeedbackVisible(true);
+      setTimeout(() => {
+        setFeedbackVisible(false);
+        resetToNormalState();
+      }, 3000);
     } finally {
       setUnlinking(false);
     }
@@ -1812,18 +1813,6 @@ function LinkStudents() {
           </View>
         </Modal>
 
-        {/* Network Error Modal */}
-        <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
-          <View style={styles.modalOverlayCenter}>
-            <View style={styles.fbModalCard}>
-              <View style={styles.fbModalContent}>
-                <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
-                {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
-              </View>
-            </View>
-          </View>
-        </Modal>
-
         {/* Student Info Modal - Ultra Modern Design */}
         <Modal transparent animationType="fade" visible={studentInfoVisible} onRequestClose={() => { setStudentInfoVisible(false); setStudentInfoData(null); }}>
           <View style={styles.modernModalOverlay}>
@@ -2082,6 +2071,8 @@ function LinkStudents() {
         </Modal>
 
       </View>
+      
+      <OfflineBanner visible={showOfflineBanner} />
     </>
   );
 }

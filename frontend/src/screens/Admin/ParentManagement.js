@@ -5,6 +5,8 @@ import { useNavigation, useFocusEffect, useRoute, useIsFocused } from '@react-na
 import { collection, query, where, getDocs, onSnapshot, doc, deleteDoc, setDoc, getDoc } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
 import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 import AdminTopHeader from './AdminTopHeader';
 const AboutLogo = require('../../assets/logo.png');
 
@@ -46,6 +48,7 @@ const ParentManagement = () => {
   const [networkErrorTitle, setNetworkErrorTitle] = useState('');
   const [networkErrorMessage, setNetworkErrorMessage] = useState('');
   const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
   const searchStateRef = useRef({ isSearching: false, searchQuery: '', navigatingToProfile: false }); // Preserve search state across navigation
 
   // Search state is now driven by universal header via route params
@@ -141,6 +144,22 @@ const ParentManagement = () => {
       setLoading(false);
     }
   };
+
+  // Monitor network connectivity
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const isConnected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!isConnected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const isConnected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!isConnected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     loadAllParents();
@@ -293,6 +312,7 @@ const ParentManagement = () => {
   return (
     <View style={{ flex: 1, backgroundColor: '#F9FAFB' }}>
       <AdminTopHeader />
+      <OfflineBanner visible={showOfflineBanner} />
       <KeyboardAvoidingView 
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}

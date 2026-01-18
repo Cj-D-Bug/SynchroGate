@@ -6,6 +6,9 @@ import { collection, query, where, getDocs, orderBy, limit, doc, setDoc, getDoc,
 import { db } from '../../utils/firebaseConfig';
 import { deleteAllUserConversations } from '../../utils/conversationUtils';
 import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
+import { fetchWithCache, isNetworkError } from '../../utils/offlineCache';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 import AdminTopHeader from './AdminTopHeader';
 const AboutLogo = require('../../assets/logo.png');
 
@@ -56,10 +59,6 @@ const StudentManagement = () => {
   const [feedbackSuccess, setFeedbackSuccess] = useState(false);
   const [feedbackTitle, setFeedbackTitle] = useState('');
   const [feedbackTextColor, setFeedbackTextColor] = useState('#050505');
-  const [networkErrorVisible, setNetworkErrorVisible] = useState(false);
-  const [networkErrorTitle, setNetworkErrorTitle] = useState('');
-  const [networkErrorMessage, setNetworkErrorMessage] = useState('');
-  const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [isChangingQR, setIsChangingQR] = useState(false);
   const [changeQrConfirmVisible, setChangeQrConfirmVisible] = useState(false);
@@ -71,6 +70,8 @@ const StudentManagement = () => {
   const [listItemsQRStatus, setListItemsQRStatus] = useState(new Map()); // Map<studentId, {hasQR, isNew}> for filtered list
   const countsRef = useRef({ yearCounts: null, courseCounts: null });
   const searchStateRef = useRef({ isSearching: false, searchQuery: '', navigatingToProfile: false }); // Preserve search state across navigation
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
   const adminCardPalette = {
     cardBg: '#FFFFFF',
     borderColor: '#E5E7EB',
@@ -162,31 +163,44 @@ const StudentManagement = () => {
     setLoading(true);
     setError(null);
     try {
-      const usersRef = collection(db, 'users');
-      const q = query(usersRef, where('role', '==', 'student'));
-      const snap = await getDocs(q);
-      const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      console.log('Loaded students with fields:', items.length > 0 ? Object.keys(items[0]) : 'No students');
-      console.log('Sample student data:', items.length > 0 ? items[0] : 'No students');
-      setStudents(items);
+      const { data, fromCache } = await fetchWithCache('admin_student_management_students', async () => {
+        const usersRef = collection(db, 'users');
+        const q = query(usersRef, where('role', '==', 'student'));
+        const snap = await getDocs(q);
+        return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      });
+      console.log('Loaded students with fields:', data.length > 0 ? Object.keys(data[0]) : 'No students');
+      console.log('Sample student data:', data.length > 0 ? data[0] : 'No students');
+      if (fromCache) {
+        console.log('Loaded students from offline cache');
+      }
+      setStudents(data);
     } catch (e) {
       console.error('Error loading students:', e);
-      // Only show network error modal for actual network errors
-      if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      } else {
-        setError('Failed to load students');
-        setStudents([]);
-      }
+      setError('Failed to load students');
+      setStudents([]);
     } finally {
       setLoading(false);
     }
   };
+
+  // Monitor network connectivity
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const isConnected = state.isConnected && state.isInternetReachable;
+      setIsOnline(isConnected);
+      setShowOfflineBanner(!isConnected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const isConnected = state.isConnected && state.isInternetReachable;
+      setIsOnline(isConnected);
+      setShowOfflineBanner(!isConnected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     loadAllStudents();
@@ -514,15 +528,6 @@ const StudentManagement = () => {
       setListItems(yearStudents);
     } catch (e) {
       console.error('Error fetching students for year:', e);
-      // Only show network error modal for actual network errors
-      if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      }
       setListItems([]);
     } finally {
       setListLoading(false);
@@ -556,15 +561,6 @@ const StudentManagement = () => {
       setListItems(courseStudents);
     } catch (e) {
       console.error('Error fetching students for course:', e);
-      // Only show network error modal for actual network errors
-      if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      }
       setListItems([]);
     } finally {
       setListLoading(false);
@@ -904,6 +900,19 @@ const StudentManagement = () => {
   // Change QR code for a single student
   const changeStudentQR = async () => {
     if (!detailStudent) return;
+
+    // Check if offline
+    if (!isOnline) {
+      setChangeQrConfirmVisible(false);
+      setFeedbackMessage('Cannot change QR code while offline. Please check your internet connection.');
+      setFeedbackSuccess(false);
+      setFeedbackTitle('No internet Connection');
+      setFeedbackTextColor('#8B0000');
+      setFeedbackVisible(true);
+      setTimeout(() => setFeedbackVisible(false), 3000);
+      return;
+    }
+
     setChangingQr(true);
     try {
       const sid = String(detailStudent.studentId || detailStudent.id);
@@ -1020,20 +1029,10 @@ const StudentManagement = () => {
       await loadAllStudents();
     } catch (e) {
       console.error('Error changing QR code:', e);
-      // Only show network error modal for actual network errors
-      if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      } else {
-        setFeedbackMessage(`Failed to change QR code: ${e.message}`);
-        setFeedbackTitle('Error');
-        setFeedbackTextColor('#DC2626');
-        setFeedbackSuccess(false);
-      }
+      setFeedbackMessage(`Failed to change QR code: ${e.message}`);
+      setFeedbackTitle('Error');
+      setFeedbackTextColor('#DC2626');
+      setFeedbackSuccess(false);
     } finally {
       setChangingQr(false);
       setChangeQrConfirmVisible(false);
@@ -1053,6 +1052,19 @@ const StudentManagement = () => {
   // Delete student account
   const deleteStudentAccount = async () => {
     if (!detailStudent) return;
+
+    // Check if offline
+    if (!isOnline) {
+      setDeleteStudentConfirmVisible(false);
+      setFeedbackMessage('Cannot delete student account while offline. Please check your internet connection.');
+      setFeedbackSuccess(false);
+      setFeedbackTitle('No internet Connection');
+      setFeedbackTextColor('#8B0000');
+      setFeedbackVisible(true);
+      setTimeout(() => setFeedbackVisible(false), 3000);
+      return;
+    }
+
     setDeletingStudent(true);
     try {
       const sid = detailStudent?.id || detailStudent?.uid;
@@ -1258,20 +1270,10 @@ const StudentManagement = () => {
       await loadAllStudents();
     } catch (e) {
       console.error('Error deleting student account:', e);
-      // Only show network error modal for actual network errors
-      if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      } else {
-        setFeedbackMessage(`Failed to delete student account: ${e.message}`);
-        setFeedbackTitle('Error');
-        setFeedbackTextColor('#DC2626');
-        setFeedbackSuccess(false);
-      }
+      setFeedbackMessage(`Failed to delete student account: ${e.message}`);
+      setFeedbackTitle('Error');
+      setFeedbackTextColor('#DC2626');
+      setFeedbackSuccess(false);
     } finally {
       setDeletingStudent(false);
       setDeleteStudentConfirmVisible(false);
@@ -1290,6 +1292,19 @@ const StudentManagement = () => {
   // Change QR codes for selected students
   const changeSelectedQRCodes = async () => {
     if (selectedIds.size === 0) return;
+
+    // Check if offline
+    if (!isOnline) {
+      setConfirmVisible(false);
+      setFeedbackMessage('Cannot change QR codes while offline. Please check your internet connection.');
+      setFeedbackSuccess(false);
+      setFeedbackTitle('No internet Connection');
+      setFeedbackTextColor('#8B0000');
+      setFeedbackVisible(true);
+      setTimeout(() => setFeedbackVisible(false), 3000);
+      return;
+    }
+
     setChanging(true);
     setProgressDone(0);
     setProgressTotal(selectedIds.size);
@@ -1508,21 +1523,11 @@ const StudentManagement = () => {
       }, 500);
     } catch (e) {
       console.error('Error changing QR codes:', e);
-      // Only show network error modal for actual network errors
-      if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      } else {
-        setFeedbackMessage(`Failed to change QR codes: ${e.message}`);
-        setFeedbackTitle('Error');
-        setFeedbackTextColor('#DC2626');
-        setFeedbackSuccess(false);
-        setFeedbackVisible(true);
-      }
+      setFeedbackMessage(`Failed to change QR codes: ${e.message}`);
+      setFeedbackTitle('Error');
+      setFeedbackTextColor('#DC2626');
+      setFeedbackSuccess(false);
+      setFeedbackVisible(true);
     } finally {
       setChanging(false);
       setProgressDone(0);
@@ -1538,6 +1543,7 @@ const StudentManagement = () => {
   return (
     <View style={{ flex: 1, backgroundColor: '#F9FAFB' }}>
       <AdminTopHeader />
+      <OfflineBanner visible={showOfflineBanner} />
       <KeyboardAvoidingView 
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -2179,18 +2185,6 @@ const StudentManagement = () => {
           </View>
         </View>
       </Modal>
-
-      {/* Network Error Modal */}
-      <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
-        <View style={styles.modalOverlayCenter}>
-          <View style={styles.fbModalCard}>
-            <View style={styles.fbModalContent}>
-              <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
-              {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
-            </View>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 };
@@ -2759,5 +2753,3 @@ const styles = StyleSheet.create({
 });
 
 export default StudentManagement;
-
- 

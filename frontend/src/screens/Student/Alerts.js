@@ -35,8 +35,9 @@ import { onSnapshot } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
 import { updateLinkFcmTokens } from '../../utils/linkFcmTokenManager';
 import { generateAndSavePushToken } from '../../utils/pushTokenGenerator';
-import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
 // Removed: sendAlertPushNotification import - backend handles all push notifications automatically
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 const AboutLogo = require('../../assets/logo.png');
 
 const { width, height } = Dimensions.get('window');
@@ -59,15 +60,15 @@ const Alerts = () => {
   const [feedbackVisible, setFeedbackVisible] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [feedbackSuccess, setFeedbackSuccess] = useState(true);
-  const [networkErrorVisible, setNetworkErrorVisible] = useState(false);
-  const [networkErrorTitle, setNetworkErrorTitle] = useState('');
-  const [networkErrorMessage, setNetworkErrorMessage] = useState('');
-  const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
   const [actionLoading, setActionLoading] = useState({ id: null, action: null });
   const [markingAsRead, setMarkingAsRead] = useState(false);
   const [scheduleModalVisible, setScheduleModalVisible] = useState(false);
   const [scheduleDetail, setScheduleDetail] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [errorModalVisible, setErrorModalVisible] = useState(false);
+  const [errorModalMessage, setErrorModalMessage] = useState('');
   
 
   const alertTypes = {
@@ -86,6 +87,24 @@ const Alerts = () => {
     'account_verified': { label: 'Account Verified', icon: 'shield-checkmark-outline', color: '#10B981' },
     'schedule_permission_response': { label: 'Schedule Permission Response', icon: 'lock-open-outline', color: '#F59E0B' },
   };
+
+  // Network monitoring
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // Load alerts for student
   const loadAlerts = async () => {
@@ -390,7 +409,19 @@ const Alerts = () => {
     } catch {}
   };
 
+  const showErrorModal = (message) => {
+    setErrorModalMessage(message);
+    setErrorModalVisible(true);
+    setTimeout(() => setErrorModalVisible(false), 3000);
+  };
+
   const markAllAsRead = async () => {
+    // Check internet connection before proceeding
+    if (!isConnected) {
+      showErrorModal('No internet connection. Please check your network and try again.');
+      return;
+    }
+    
     try {
       if (!user?.studentId) return;
       setMarkingAsRead(true);
@@ -407,15 +438,6 @@ const Alerts = () => {
       }
     } catch (error) {
       console.error('Error marking alerts as read:', error);
-      // Only show network error modal for actual network errors
-      if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      }
       setFeedbackMessage('Failed to mark notifications as read.');
       setFeedbackSuccess(false);
       setFeedbackVisible(true);
@@ -426,6 +448,12 @@ const Alerts = () => {
   };
 
   const deleteAllNotifications = async () => {
+    // Check internet connection before proceeding
+    if (!isConnected) {
+      showErrorModal('No internet connection. Please check your network and try again.');
+      return;
+    }
+    
     try {
       if (!user?.studentId) return;
       
@@ -475,21 +503,11 @@ const Alerts = () => {
       setTimeout(()=> setFeedbackVisible(false), 3000);
     } catch (e) {
       console.error('Error deleting notifications:', e);
-      // Only show network error modal for actual network errors
-      if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      } else {
         setDeleteConfirmVisible(false);
         setFeedbackSuccess(false);
         setFeedbackMessage('Failed to delete notifications.');
         setFeedbackVisible(true);
         setTimeout(()=> setFeedbackVisible(false), 3000);
-      }
     } finally {
       setIsDeleting(false);
     }
@@ -714,17 +732,7 @@ const Alerts = () => {
     console.log('✅ STUDENT ACCEPT: Accept process completed successfully');
     } catch (e) {
       console.error('Error accepting request:', e);
-      // Only show network error modal for actual network errors
-      if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      } else {
         Alert.alert('Error', 'Failed to accept request');
-      }
     } finally {
       setActionLoading({ id: null, action: null });
     }
@@ -868,12 +876,6 @@ const Alerts = () => {
       console.error('Error declining request:', err);
       // Only show network error modal for actual network errors
       if (err?.code?.includes('unavailable') || err?.code?.includes('network') || err?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: err.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
       } else {
         Alert.alert('Error', 'Failed to decline request');
       }
@@ -1283,17 +1285,19 @@ const Alerts = () => {
       </View>
     </Modal>
 
-    {/* Network Error Modal */}
-    <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
+    {/* Error Feedback Modal */}
+    <Modal transparent animationType="fade" visible={errorModalVisible} onRequestClose={() => setErrorModalVisible(false)}>
       <View style={styles.modalOverlayCenter}>
         <View style={styles.fbModalCard}>
           <View style={styles.fbModalContent}>
-            <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
-            {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
+            <Text style={[styles.fbModalTitle, { color: '#8B0000' }]}>No internet Connection</Text>
+            <Text style={styles.fbModalMessage}>{errorModalMessage}</Text>
           </View>
         </View>
       </View>
     </Modal>
+
+    <OfflineBanner visible={showOfflineBanner} />
   </>);
 };
 

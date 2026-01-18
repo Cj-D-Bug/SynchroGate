@@ -5,76 +5,30 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Animated,
   Dimensions,
-  Image,
   Modal,
-  StatusBar,
-  Platform,
   TextInput,
-  Alert,
-  Pressable,
+  ActivityIndicator,
 } from 'react-native';
-import { useNavigation, useIsFocused, useFocusEffect, CommonActions } from '@react-navigation/native';
+import { useNavigation, useIsFocused } from '@react-navigation/native';
 import { AuthContext } from '../../contexts/AuthContext';
-import sidebarEventEmitter from '../../utils/sidebarEventEmitter';
-import useNetworkMonitor from '../../hooks/useNetworkMonitor';
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { doc, onSnapshot, getDoc, setDoc, collection, query, where, getDocs, orderBy, addDoc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { collection, query, getDocs, orderBy, addDoc, deleteDoc, updateDoc, doc } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
-import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
-import { wp, hp, fontSizes, responsiveStyles, getResponsiveDimensions } from '../../utils/responsive';
-
-const { width, height } = Dimensions.get('window');
-const statusBarHeight = StatusBar.currentHeight || 0;
-const dimensions = getResponsiveDimensions();
+import { fetchWithCache, isNetworkError } from '../../utils/offlineCache';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 
 const Events = () => {
-  const { user, logout } = useContext(AuthContext);
-  const isConnected = useNetworkMonitor();
+  const { user } = useContext(AuthContext);
   const navigation = useNavigation();
   const isFocused = useIsFocused();
 
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [logoutVisible, setLogoutVisible] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [announcements, setAnnouncements] = useState([]);
   const [announcementsLoading, setAnnouncementsLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState('all');
-  const [expandedAnnouncements, setExpandedAnnouncements] = useState([]);
-  
-  // Create announcement states
-  const [createModalVisible, setCreateModalVisible] = useState(false);
-  const [newAnnouncement, setNewAnnouncement] = useState({
-    title: '',
-    message: '',
-    category: 'general',
-    author: user?.firstName || 'Admin'
-  });
-  const [creating, setCreating] = useState(false);
-  
-  // Feedback modal states
-  const [feedbackVisible, setFeedbackVisible] = useState(false);
-  const [feedbackMessage, setFeedbackMessage] = useState('');
-  const [feedbackSuccess, setFeedbackSuccess] = useState(true);
-  const [networkErrorVisible, setNetworkErrorVisible] = useState(false);
-  const [networkErrorTitle, setNetworkErrorTitle] = useState('');
-  const [networkErrorMessage, setNetworkErrorMessage] = useState('');
-  const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
-  
-  // Delete confirmation modal states
-  const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [announcementToDelete, setAnnouncementToDelete] = useState(null);
-  
-  // Create confirmation modal states
-  const [createConfirmVisible, setCreateConfirmVisible] = useState(false);
-
-  // Sidebar animation - responsive
-  const sidebarAnimRight = useState(new Animated.Value(-SIDEBAR_WIDTH))[0];
-
-  // Tab bar visibility is handled by navigation structure
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
 
   // Card visual palette (matches admin dashboard card styling)
   const adminCardPalette = {
@@ -98,12 +52,47 @@ const Events = () => {
     { id: 'emergency', name: 'Emergency', icon: 'warning-outline' },
   ];
 
-  // Remove profile loading logic that causes infinite loading
+  // Create announcement states
+  const [createModalVisible, setCreateModalVisible] = useState(false);
+  const [newAnnouncement, setNewAnnouncement] = useState({
+    title: '',
+    message: '',
+    category: 'general',
+    author: user?.firstName || 'Admin'
+  });
+  const [creating, setCreating] = useState(false);
+  
+  // Feedback modal states
+  const [feedbackVisible, setFeedbackVisible] = useState(false);
+  const [feedbackMessage, setFeedbackMessage] = useState('');
+  const [feedbackSuccess, setFeedbackSuccess] = useState(true);
+  
+  // Delete confirmation modal states
+  const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [announcementToDelete, setAnnouncementToDelete] = useState(null);
+
+  // Create confirmation modal states
+  const [createConfirmVisible, setCreateConfirmVisible] = useState(false);
+  const [creatingConfirm, setCreatingConfirm] = useState(false);
+
+  // Network monitoring
   useEffect(() => {
-    if (isFocused) {
-      setLoading(false); // Set loading to false immediately
-    }
-  }, [isFocused]);
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const connected = state.isConnected;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const connected = state.isConnected;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // Update author when user changes
   useEffect(() => {
@@ -116,44 +105,48 @@ const Events = () => {
   const loadAnnouncements = async () => {
     setAnnouncementsLoading(true);
     try {
-      const announcementsRef = collection(db, 'announcements');
-      const announcementsQuery = query(announcementsRef, orderBy('createdAt', 'desc'));
-      const announcementsSnap = await getDocs(announcementsQuery);
-      
-      const announcementsData = [];
-      announcementsSnap.docs.forEach((doc) => {
-        const data = doc.data();
-        announcementsData.push({
-          id: doc.id,
-          title: data.title || 'Announcement',
-          message: data.message || '',
-          category: data.category || 'general',
-          createdAt: data.createdAt || new Date().toISOString(),
-          priority: data.priority || 'normal',
-          author: data.author || 'Admin',
-          pinned: data.pinned || false,
-          ...data
+      const { data, fromCache } = await fetchWithCache('admin_events_announcements', async () => {
+        const announcementsRef = collection(db, 'announcements');
+        const announcementsQuery = query(announcementsRef, orderBy('createdAt', 'desc'));
+        const announcementsSnap = await getDocs(announcementsQuery);
+        
+        const announcementsData = [];
+        announcementsSnap.forEach((doc) => {
+          const data = doc.data();
+          announcementsData.push({
+            id: doc.id,
+            title: data.title || 'Announcement',
+            message: data.message || '',
+            category: data.category || 'general',
+            createdAt: data.createdAt || new Date().toISOString(),
+            priority: data.priority || 'normal',
+            author: data.author || 'Admin',
+            pinned: data.pinned || false,
+            ...data
+          });
         });
+        
+        return announcementsData;
       });
-      
+
       // Sort announcements: pinned first, then by creation date
-      announcementsData.sort((a, b) => {
+      const sortedData = [...(data || [])];
+      sortedData.sort((a, b) => {
         if (a.pinned && !b.pinned) return -1;
         if (!a.pinned && b.pinned) return 1;
         return new Date(b.createdAt) - new Date(a.createdAt);
       });
       
-      setAnnouncements(announcementsData);
+      setAnnouncements(sortedData);
+
+      // Show offline banner if data loaded from cache
+      if (fromCache) {
+        setShowOfflineBanner(true);
+      }
     } catch (error) {
-      console.error('Error loading announcements:', error);
-      // Only show network error modal for actual network errors
-      if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
+      console.log('Error loading announcements:', error);
+      if (isNetworkError(error)) {
+        setShowOfflineBanner(true);
       }
       setAnnouncements([]);
     } finally {
@@ -164,55 +157,6 @@ const Events = () => {
   useEffect(() => {
     if (isFocused) loadAnnouncements();
   }, [isFocused]);
-
-  // Toggle Sidebar
-  const toggleSidebar = (open) => {
-    setSidebarOpen(open);
-    Animated.timing(sidebarAnimRight, {
-      toValue: open ? 0 : -SIDEBAR_WIDTH,
-      duration: 300,
-      useNativeDriver: false,
-    }).start();
-  };
-
-  useEffect(() => {
-    const handleToggleSidebar = () => toggleSidebar(!sidebarOpen);
-    sidebarEventEmitter.on('toggleSidebar', handleToggleSidebar);
-    return () => sidebarEventEmitter.off('toggleSidebar', handleToggleSidebar);
-  }, [sidebarOpen]);
-
-  // Determine active sidebar item based on current route
-  const getActiveSidebarItem = (routeName) => {
-    const state = navigation.getState();
-    const currentRoute = state.routes[state.index]?.name;
-    const currentScreen = state.routes[state.index]?.state?.routes?.[state.routes[state.index]?.state?.index]?.name;
-    
-    // Check both tab route and screen route
-    if (currentRoute === routeName || currentScreen === routeName) {
-      return true;
-    }
-    
-    // Special cases for nested navigation
-    if (routeName === 'Home' && (currentScreen === 'AdminDashboard' || currentRoute === 'Home')) {
-      return true;
-    }
-    
-    return false;
-  };
-
-  const confirmLogout = async () => {
-    setLogoutVisible(false);
-    toggleSidebar(false);
-    try {
-      await logout();
-    } catch (e) {
-      console.log('Logout error:', e);
-    }
-  };
-
-  const cancelLogout = () => {
-    setLogoutVisible(false);
-  };
 
   // Create announcement functions
   const openCreateModal = () => {
@@ -235,34 +179,35 @@ const Events = () => {
     });
   };
 
-  const handleCreatePress = () => {
-    if (!newAnnouncement.title.trim() || !newAnnouncement.message.trim()) {
-      setFeedbackMessage('Please fill in both title and message');
-      setFeedbackSuccess(false);
-      setFeedbackVisible(true);
-      setTimeout(() => setFeedbackVisible(false), 3000);
-      return;
-    }
-    setCreateConfirmVisible(true);
-  };
-
   const createAnnouncement = async () => {
+    // Check if offline
+    if (!isOnline) {
+      setFeedbackMessage('Cannot create announcement while offline. Please check your internet connection.');
+      setFeedbackSuccess(false);
+      setFeedbackVisible(true);
+      setTimeout(() => setFeedbackVisible(false), 3000);
+      setCreateConfirmVisible(false);
+      return;
+    }
+
     if (!newAnnouncement.title.trim() || !newAnnouncement.message.trim()) {
       setFeedbackMessage('Please fill in both title and message');
       setFeedbackSuccess(false);
       setFeedbackVisible(true);
-      setCreateConfirmVisible(false);
       setTimeout(() => setFeedbackVisible(false), 3000);
       return;
     }
 
-    setCreating(true);
+    if (creatingConfirm) return;
+    setCreatingConfirm(true);
+    setCreateConfirmVisible(false);
+    
     try {
       const announcementData = {
         title: newAnnouncement.title.trim(),
         message: newAnnouncement.message.trim(),
         category: newAnnouncement.category,
-        priority: 'normal', // Default priority
+        priority: 'normal',
         author: newAnnouncement.author,
         createdAt: new Date().toISOString(),
         createdBy: user?.uid || user?.adminId || 'admin'
@@ -273,37 +218,34 @@ const Events = () => {
       setFeedbackMessage('Announcement created successfully!');
       setFeedbackSuccess(true);
       setFeedbackVisible(true);
-      setCreateConfirmVisible(false);
+      setTimeout(() => setFeedbackVisible(false), 3000);
+      
       closeCreateModal();
       loadAnnouncements();
-      setTimeout(() => setFeedbackVisible(false), 3000);
     } catch (error) {
-      console.error('Error creating announcement:', error);
-      // Only show network error modal for actual network errors
-      if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      } else {
-        setFeedbackMessage('Failed to create announcement. Please try again.');
-        setFeedbackSuccess(false);
-        setFeedbackVisible(true);
-        setCreateConfirmVisible(false);
-        closeCreateModal();
-        loadAnnouncements();
-        setTimeout(() => setFeedbackVisible(false), 3000);
-      }
+      console.log('Error creating announcement:', error);
+      setFeedbackMessage('Failed to create announcement. Please try again.');
+      setFeedbackSuccess(false);
+      setFeedbackVisible(true);
+      setTimeout(() => setFeedbackVisible(false), 3000);
     } finally {
-      setCreating(false);
+      setCreatingConfirm(false);
     }
   };
 
   // Delete announcement function
   const deleteAnnouncement = async () => {
-    if (!announcementToDelete || isDeleting) return;
+    if (!announcementToDelete) return;
+
+    // Check if offline
+    if (!isOnline) {
+      setFeedbackMessage('Cannot delete announcement while offline. Please check your internet connection.');
+      setFeedbackSuccess(false);
+      setFeedbackVisible(true);
+      setTimeout(() => setFeedbackVisible(false), 3000);
+      setDeleteConfirmVisible(false);
+      return;
+    }
     
     setIsDeleting(true);
     try {
@@ -312,28 +254,17 @@ const Events = () => {
       setFeedbackMessage('Announcement deleted successfully');
       setFeedbackSuccess(true);
       setFeedbackVisible(true);
+      setTimeout(() => setFeedbackVisible(false), 1500);
+      
       setDeleteConfirmVisible(false);
       setAnnouncementToDelete(null);
       loadAnnouncements();
-      setTimeout(() => setFeedbackVisible(false), 3000);
     } catch (error) {
-      console.error('Error deleting announcement:', error);
-      // Only show network error modal for actual network errors
-      if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      } else {
-        setFeedbackMessage('Failed to delete announcement');
-        setFeedbackSuccess(false);
-        setFeedbackVisible(true);
-        setDeleteConfirmVisible(false);
-        setAnnouncementToDelete(null);
-        setTimeout(() => setFeedbackVisible(false), 3000);
-      }
+      console.log('Error deleting announcement:', error);
+      setFeedbackMessage('Failed to delete announcement');
+      setFeedbackSuccess(false);
+      setFeedbackVisible(true);
+      setTimeout(() => setFeedbackVisible(false), 2000);
     } finally {
       setIsDeleting(false);
     }
@@ -341,34 +272,43 @@ const Events = () => {
 
   // Handle delete button press
   const handleDeletePress = (announcement) => {
+    if (!isOnline) {
+      setFeedbackMessage('Cannot delete announcement while offline. Please check your internet connection.');
+      setFeedbackSuccess(false);
+      setFeedbackVisible(true);
+      setTimeout(() => setFeedbackVisible(false), 3000);
+      return;
+    }
     setAnnouncementToDelete(announcement);
     setDeleteConfirmVisible(true);
   };
 
   // Handle pin button press
   const handlePinPress = async (announcement) => {
+    // Check if offline
+    if (!isOnline) {
+      setFeedbackMessage('Cannot update pin status while offline. Please check your internet connection.');
+      setFeedbackSuccess(false);
+      setFeedbackVisible(true);
+      setTimeout(() => setFeedbackVisible(false), 3000);
+      return;
+    }
+
     try {
       const newPinnedState = !announcement.pinned;
       
-      // Update Firebase document
       await updateDoc(doc(db, 'announcements', announcement.id), {
         pinned: newPinnedState
       });
       
-      // Refresh announcements to show new order
       loadAnnouncements();
     } catch (error) {
       console.log('Error updating pin status:', error);
+      setFeedbackMessage('Failed to update pin status. Please check your internet connection.');
+      setFeedbackSuccess(false);
+      setFeedbackVisible(true);
+      setTimeout(() => setFeedbackVisible(false), 3000);
     }
-  };
-
-  // Toggle announcement expansion
-  const toggleAnnouncement = (id) => {
-    setExpandedAnnouncements(prev => 
-      prev.includes(id) 
-        ? prev.filter(item => item !== id)
-        : [...prev, id]
-    );
   };
 
   // Filter announcements based on selected category
@@ -414,383 +354,194 @@ const Events = () => {
     }
   };
 
-  if (loading) {
-    return (
-      <View style={{ flex: 1, backgroundColor: '#FFFFFF' }} />
-    );
-  }
-
-  return (<>
-    <View style={styles.wrapper}>
-      {/* Sidebar shown above everything using Modal to avoid tab overlap */}
-      <Modal transparent visible={sidebarOpen} animationType="fade" onRequestClose={() => toggleSidebar(false)}>
-        <TouchableOpacity
-          style={styles.overlay}
-          activeOpacity={1}
-          onPress={() => toggleSidebar(false)}
-        />
-        <Animated.View style={[styles.sidebar, { right: sidebarAnimRight }]}>
-          <Text style={styles.sidebarTitle}>Menu</Text>
-          
-          <TouchableOpacity
-            style={[styles.sidebarItem, getActiveSidebarItem('AdminDashboard') && styles.activeSidebarItem]}
-            onPress={() => {
-              toggleSidebar(false);
-              try {
-                // Reset the HomeStack to only contain AdminDashboard
-                navigation.reset({
-                  index: 0,
-                  routes: [{ name: 'AdminDashboard' }],
-                });
-              } catch {
-                // Fallback: try parent navigation
-                const parentNav = navigation.getParent?.();
-                if (parentNav) {
-                  parentNav.navigate('Home', { screen: 'AdminDashboard' });
-                } else {
-                  navigation.navigate('AdminDashboard');
-                }
-              }
-            }}
-          >
-            <Ionicons name="home-outline" size={20} color={getActiveSidebarItem('AdminDashboard') ? "#2563EB" : "#111827"} />
-            <Text style={[styles.sidebarText, getActiveSidebarItem('AdminDashboard') && styles.activeSidebarText]}>Dashboard</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.sidebarItem, getActiveSidebarItem('Events') && styles.activeSidebarItem]}
-            onPress={() => {
-              toggleSidebar(false);
-              try {
-                const parentNav = navigation.getParent?.();
-                if (parentNav) {
-                  parentNav.navigate('Home', { screen: 'Events' });
-                } else {
-                  navigation.navigate('Events');
-                }
-              } catch {
-                console.log('Events navigation failed');
-              }
-            }}
-          >
-            <Ionicons name="calendar-outline" size={20} color={getActiveSidebarItem('Events') ? "#2563EB" : "#111827"} />
-            <Text style={[styles.sidebarText, getActiveSidebarItem('Events') && styles.activeSidebarText]}>Events</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.sidebarItem, getActiveSidebarItem('StudentsTab') && styles.activeSidebarItem]}
-            onPress={() => {
-              toggleSidebar(false);
-              try {
-                const parentNav = navigation.getParent?.();
-                if (parentNav) {
-                  parentNav.navigate('StudentsTab');
-                } else {
-                  navigation.navigate('StudentsTab');
-                }
-              } catch {
-                navigation.navigate('StudentsTab');
-              }
-            }}
-          >
-            <Ionicons name="school-outline" size={20} color={getActiveSidebarItem('StudentsTab') ? "#2563EB" : "#111827"} />
-            <Text style={[styles.sidebarText, getActiveSidebarItem('StudentsTab') && styles.activeSidebarText]}>Manage Student</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.sidebarItem, getActiveSidebarItem('ParentsTab') && styles.activeSidebarItem]}
-            onPress={() => {
-              toggleSidebar(false);
-              try {
-                const parentNav = navigation.getParent?.();
-                if (parentNav) {
-                  parentNav.navigate('ParentsTab');
-                } else {
-                  navigation.navigate('ParentsTab');
-                }
-              } catch {
-                navigation.navigate('ParentsTab');
-              }
-            }}
-          >
-            <Ionicons name="people-outline" size={20} color={getActiveSidebarItem('ParentsTab') ? "#2563EB" : "#111827"} />
-            <Text style={[styles.sidebarText, getActiveSidebarItem('ParentsTab') && styles.activeSidebarText]}>Manage Parent</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.sidebarItem, getActiveSidebarItem('ActivityLogsTab') && styles.activeSidebarItem]}
-            onPress={() => {
-              toggleSidebar(false);
-              try {
-                const parentNav = navigation.getParent?.();
-                if (parentNav) {
-                  parentNav.navigate('ActivityLogsTab');
-                } else {
-                  navigation.navigate('ActivityLogsTab');
-                }
-              } catch {
-                navigation.navigate('ActivityLogsTab');
-              }
-            }}
-          >
-            <Ionicons name="list-outline" size={20} color={getActiveSidebarItem('ActivityLogsTab') ? "#2563EB" : "#111827"} />
-            <Text style={[styles.sidebarText, getActiveSidebarItem('ActivityLogsTab') && styles.activeSidebarText]}>Activity Logs</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.sidebarItem, getActiveSidebarItem('AlertsTab') && styles.activeSidebarItem]}
-            onPress={() => {
-              toggleSidebar(false);
-              try {
-                const parentNav = navigation.getParent?.();
-                if (parentNav) {
-                  parentNav.navigate('AlertsTab');
-                } else {
-                  navigation.navigate('AlertsTab');
-                }
-              } catch {
-                navigation.navigate('AlertsTab');
-              }
-            }}
-          >
-            <Ionicons name="notifications-outline" size={20} color={getActiveSidebarItem('AlertsTab') ? "#2563EB" : "#111827"} />
-            <Text style={[styles.sidebarText, getActiveSidebarItem('AlertsTab') && styles.activeSidebarText]}>Alerts</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.sidebarItem, getActiveSidebarItem('About') && styles.activeSidebarItem]}
-            onPress={() => {
-              toggleSidebar(false);
-              try {
-                const parentNav = navigation.getParent?.();
-                if (parentNav) {
-                  parentNav.navigate('Home', { screen: 'About' });
-                } else {
-                  navigation.navigate('About');
-                }
-              } catch {
-                navigation.navigate('About');
-              }
-            }}
-          >
-            <Ionicons name="information-circle-outline" size={20} color={getActiveSidebarItem('About') ? "#2563EB" : "#111827"} />
-            <Text style={[styles.sidebarText, getActiveSidebarItem('About') && styles.activeSidebarText]}>About</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.sidebarItem, styles.logoutItem]}
-            onPress={() => {
-              toggleSidebar(false);
-              setLogoutVisible(true);
-            }}
-          >
-            <Ionicons name="log-out-outline" size={20} color="#b91c1c" />
-            <Text style={[styles.sidebarText, { color: '#b91c1c' }]}>Logout</Text>
-          </TouchableOpacity>
-        </Animated.View>
-      </Modal>
-      {/* Content */}
-      <ScrollView 
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* Category Selection - 3x2 Grid */}
-        <View style={styles.section}>
-          <View style={styles.categoryGrid}>
-            {categories.map((category) => {
-              const isSelected = selectedCategory === category.id;
-              
-              return (
-                <TouchableOpacity
-                  key={category.id}
-                  style={[
-                    styles.categoryCard,
-                    {
-                      backgroundColor: isSelected ? '#EFF6FF' : adminCardPalette.cardBg,
-                      borderColor: isSelected ? '#004f89' : adminCardPalette.borderColor,
-                    }
-                  ]}
-                  onPress={() => setSelectedCategory(category.id)}
-                >
-                  <View style={styles.categoryCardContent}>
-                    <View style={[
-                      styles.categoryCardIconWrap,
-                      { backgroundColor: adminCardPalette.iconBg }
-                    ]}>
-                      <Ionicons 
-                        name={category.icon} 
-                        size={20} 
-                        color={adminCardPalette.accentColor} 
-                      />
-                    </View>
-                    <Text style={[
-                      styles.categoryCardLabel,
-                      { color: adminCardPalette.labelColor }
-                    ]}>
-                      {category.name}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-
-        {/* Announcements List */}
-        <View style={styles.announcementsSection}>
-          <Text style={[styles.sectionTitle, { marginTop: 0 }]}>Announcements</Text>
-          {announcementsLoading ? (
-              <View style={{ flex: 1, backgroundColor: '#FFFFFF', minHeight: 200 }} />
-            ) : filteredAnnouncements.length === 0 ? (
-              <View style={styles.centerContainer}>
-                <View style={styles.emptyCard}>
-                  <View style={styles.emptyIconWrap}>
-                    <Ionicons name="megaphone-outline" size={28} color="#2563EB" />
-                    <View style={styles.emptyIconSlash} />
-                  </View>
-                  <Text style={styles.emptyTitle}>No Announcements</Text>
-                  <Text style={styles.emptySubtext}>
-                    {selectedCategory === 'all' 
-                      ? 'No announcements have been posted yet.' 
-                      : `No ${categories.find(cat => cat.id === selectedCategory)?.name.toLowerCase()} announcements found.`
-                    }
-                  </Text>
-                </View>
-              </View>
-            ) : (
-              filteredAnnouncements.map((announcement) => {
-                const categoryInfo = getCategoryInfo(announcement.category);
+  return (
+    <>
+      <View style={styles.wrapper}>
+        {/* Content */}
+        <ScrollView 
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Category Selection - 3x2 Grid */}
+          <View style={styles.section}>
+            <View style={styles.categoryGrid}>
+              {categories.map((category) => {
+                const isSelected = selectedCategory === category.id;
                 
                 return (
-                  <View
-                    key={announcement.id}
-                    style={styles.announcementCard}
+                  <TouchableOpacity
+                    key={category.id}
+                    style={[
+                      styles.categoryCard,
+                      {
+                        backgroundColor: isSelected ? '#EFF6FF' : adminCardPalette.cardBg,
+                        borderColor: isSelected ? '#004f89' : adminCardPalette.borderColor,
+                      }
+                    ]}
+                    onPress={() => setSelectedCategory(category.id)}
                   >
-                    <View style={styles.announcementHeader}>
-                      <View style={styles.announcementTitleRow}>
-                        <View style={[styles.categoryBadge, { backgroundColor: 'rgba(0,79,137,0.12)' }]}>
-                          <Ionicons name={categoryInfo.icon} size={14} color="#004f89" />
-                          <Text style={[styles.categoryBadgeText, { color: '#004f89' }]}>
-                            {categories.find(cat => cat.id === announcement.category)?.name || 'General'}
-                          </Text>
-                        </View>
-                        <View style={styles.badgeContainer}>
-                          {announcement.priority === 'high' && (
-                            <View style={styles.priorityBadge}>
-                              <Ionicons name="warning" size={12} color="#DC2626" />
-                              <Text style={styles.priorityText}>High Priority</Text>
-                            </View>
-                          )}
-                          <TouchableOpacity 
-                            style={[styles.actionBadge, announcement.pinned && styles.pinnedBadge]}
-                            onPress={() => handlePinPress(announcement)}
-                          >
-                            <Ionicons 
-                              name={announcement.pinned ? "pin" : "pin-outline"} 
-                              size={16} 
-                              color={announcement.pinned ? "#FFFFFF" : "#004f89"} 
-                            />
-                          </TouchableOpacity>
-                          <TouchableOpacity 
-                            style={styles.actionBadge}
-                            onPress={() => handleDeletePress(announcement)}
-                          >
-                            <Ionicons name="trash-outline" size={16} color="#004f89" />
-                          </TouchableOpacity>
-                        </View>
+                    <View style={styles.categoryCardContent}>
+                      <View style={[
+                        styles.categoryCardIconWrap,
+                        { backgroundColor: adminCardPalette.iconBg }
+                      ]}>
+                        <Ionicons 
+                          name={category.icon} 
+                          size={20} 
+                          color={adminCardPalette.accentColor} 
+                        />
                       </View>
-                    </View>
-                    
-                    <View style={styles.announcementContent}>
-                      <Text selectable style={styles.announcementTitle}>Title: {announcement.title}</Text>
-                      <Text selectable style={styles.announcementMessage}>
-                        {announcement.message}
+                      <Text style={[
+                        styles.categoryCardLabel,
+                        { color: adminCardPalette.labelColor }
+                      ]}>
+                        {category.name}
                       </Text>
                     </View>
-                    
-                    <View style={styles.announcementFooter}>
-                      <Text style={styles.announcementDate}>{formatDate(announcement.createdAt)}</Text>
-                    </View>
-                  </View>
+                  </TouchableOpacity>
                 );
-              })
-            )}
-        </View>
-      </ScrollView>
-    </View>
-
-    {/* Logout Modal */}
-    <Modal
-      transparent
-      animationType="fade"
-      visible={logoutVisible}
-      onRequestClose={() => setLogoutVisible(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalCard}>
-          <View style={[styles.modalIconWrap, { backgroundColor: '#FEE2E2' }]}>
-            <Ionicons name="log-out-outline" size={28} color="#b91c1c" />
-          </View>
-          <Text style={styles.modalTitle}>Logout</Text>
-          <Text style={styles.modalText}>Are you sure you want to logout?</Text>
-          <View style={styles.modalActions}>
-            <TouchableOpacity style={styles.modalButton} onPress={cancelLogout}>
-              <Text style={styles.modalButtonText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.modalButton, styles.modalButtonDanger]} onPress={confirmLogout}>
-              <Text style={[styles.modalButtonText, styles.modalButtonDangerText]}>Logout</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
-
-    {/* Create Announcement Modal */}
-    <Modal
-      transparent
-      animationType="fade"
-      visible={createModalVisible}
-      onRequestClose={closeCreateModal}
-    >
-      <View style={styles.modernModalOverlay}>
-        <View style={[styles.modernModalCard, { maxHeight: height * 0.85, minHeight: height * 0.6 }]}>
-          <View style={styles.modernModalHeader}>
-            <View style={[styles.modernHeaderGradient, { backgroundColor: '#004f89' }]}>
-              <View style={styles.modernHeaderContent}>
-                <View style={styles.modernAvatar}>
-                  <View style={styles.avatarOctagonMedium} />
-                  <Ionicons 
-                    name="add-circle-outline" 
-                    size={24} 
-                    color="#FFFFFF" 
-                  />
-                </View>
-                <View style={styles.modernHeaderInfo}>
-                  <Text style={styles.modernName}>
-                    Create Announcement
-                  </Text>
-                  <Text style={styles.modernId}>
-                    Create a new announcement
-                  </Text>
-                </View>
-              </View>
-              <TouchableOpacity 
-                onPress={closeCreateModal} 
-                style={styles.modernCloseBtn}
-                disabled={creating}
-              >
-                <Ionicons name="close" size={20} color="#FFFFFF" />
-              </TouchableOpacity>
+              })}
             </View>
           </View>
-          
-          <ScrollView 
-            showsVerticalScrollIndicator={false}
-            style={{ flex: 1 }}
-            contentContainerStyle={{ paddingBottom: 16 }}
-          >
-            <View style={styles.modernInfoGrid}>
+
+          {/* Announcements List */}
+          <View style={styles.announcementsSection}>
+            <Text style={[styles.sectionTitle, { marginTop: 0 }]}>Announcements</Text>
+            {announcementsLoading ? (
+                <View style={{ flex: 1, backgroundColor: '#FFFFFF', minHeight: 200 }} />
+              ) : filteredAnnouncements.length === 0 ? (
+                <View style={styles.centerContainer}>
+                  <View style={styles.emptyCard}>
+                    <View style={styles.emptyIconWrap}>
+                      <Ionicons name="megaphone-outline" size={28} color="#2563EB" />
+                      <View style={styles.emptyIconSlash} />
+                    </View>
+                    <Text style={styles.emptyTitle}>No Announcements</Text>
+                    <Text style={styles.emptySubtext}>
+                      {selectedCategory === 'all' 
+                        ? 'No announcements have been posted yet.' 
+                        : `No ${categories.find(cat => cat.id === selectedCategory)?.name.toLowerCase()} announcements found.`
+                      }
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                filteredAnnouncements.map((announcement) => {
+                  const categoryInfo = getCategoryInfo(announcement.category);
+                  
+                  return (
+                    <View
+                      key={announcement.id}
+                      style={styles.announcementCard}
+                    >
+                      <View style={styles.announcementHeader}>
+                        <View style={styles.announcementTitleRow}>
+                          <View style={[styles.categoryBadge, { backgroundColor: 'rgba(0,79,137,0.12)' }]}>
+                            <Ionicons name={categoryInfo.icon} size={14} color="#004f89" />
+                            <Text style={[styles.categoryBadgeText, { color: '#004f89' }]}>
+                              {categories.find(cat => cat.id === announcement.category)?.name || 'General'}
+                            </Text>
+                          </View>
+                          <View style={styles.badgeContainer}>
+                            {announcement.priority === 'high' && (
+                              <View style={styles.priorityBadge}>
+                                <Ionicons name="warning" size={12} color="#DC2626" />
+                                <Text style={styles.priorityText}>High Priority</Text>
+                              </View>
+                            )}
+                            <TouchableOpacity 
+                              style={[
+                                styles.actionBadge,
+                                announcement.pinned && styles.actionBadgePinned
+                              ]}
+                              onPress={() => handlePinPress(announcement)}
+                            >
+                              <Ionicons 
+                                name={announcement.pinned ? "pin" : "pin-outline"} 
+                                size={20} 
+                                color={announcement.pinned ? "#FFFFFF" : "#004f89"} 
+                              />
+                            </TouchableOpacity>
+                            <TouchableOpacity 
+                              style={styles.actionBadge}
+                              onPress={() => handleDeletePress(announcement)}
+                            >
+                              <Ionicons name="trash-outline" size={20} color="#004f89" />
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      </View>
+                      
+                      <View style={styles.announcementContent}>
+                        <Text selectable style={styles.announcementTitle}>Title: {announcement.title}</Text>
+                        <Text selectable style={styles.announcementMessage}>
+                          {announcement.message}
+                        </Text>
+                      </View>
+                      
+                      <View style={styles.announcementFooter}>
+                        <View style={{ flex: 1 }} />
+                        <Text style={styles.announcementDate}>{formatDate(announcement.createdAt)}</Text>
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+          </View>
+        </ScrollView>
+        
+        {/* Plus menu button (floating action button) */}
+        <TouchableOpacity 
+          style={styles.menuFab}
+          onPress={openCreateModal}
+        >
+          <Ionicons name="add" size={24} color="#FFFFFF" />
+        </TouchableOpacity>
+        
+        <OfflineBanner visible={showOfflineBanner} />
+      </View>
+
+      {/* Create Announcement Modal */}
+      <Modal
+        transparent
+        animationType="fade"
+        visible={createModalVisible}
+        onRequestClose={closeCreateModal}
+      >
+        <View style={styles.modernModalOverlay}>
+          <View style={styles.modernModalCard}>
+            <View style={styles.modernModalHeader}>
+              <View style={[styles.modernHeaderGradient, { backgroundColor: '#004f89' }]}>
+                <View style={styles.modernHeaderContent}>
+                  <View style={styles.modernAvatar}>
+                    <View style={styles.avatarOctagonMedium} />
+                    <Ionicons 
+                      name="add-circle-outline" 
+                      size={24} 
+                      color="#FFFFFF" 
+                    />
+                  </View>
+                  <View style={styles.modernHeaderInfo}>
+                    <Text style={styles.modernName}>Create Announcement</Text>
+                    <Text style={styles.modernId}>Add a new announcement</Text>
+                  </View>
+                </View>
+                <TouchableOpacity 
+                  onPress={() => { 
+                    if (!creating && !creatingConfirm) {
+                      closeCreateModal(); 
+                    }
+                  }} 
+                  style={styles.modernCloseBtn}
+                  disabled={creating || creatingConfirm}
+                >
+                  <Ionicons name="close" size={20} color="#FFFFFF" />
+                </TouchableOpacity>
+              </View>
+            </View>
+            
+            <ScrollView style={styles.createModalContent} showsVerticalScrollIndicator={false}>
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>Title</Text>
                 <TextInput
@@ -799,7 +550,7 @@ const Events = () => {
                   onChangeText={(text) => setNewAnnouncement(prev => ({ ...prev, title: text }))}
                   placeholder="Enter announcement title"
                   placeholderTextColor="#9CA3AF"
-                  maxLength={50}
+                  maxLength={100}
                 />
               </View>
 
@@ -814,7 +565,7 @@ const Events = () => {
                   multiline
                   numberOfLines={4}
                   textAlignVertical="top"
-                  maxLength={1000}
+                  maxLength={500}
                 />
               </View>
 
@@ -833,7 +584,7 @@ const Events = () => {
                       <Ionicons 
                         name={category.icon} 
                         size={16} 
-                        color={newAnnouncement.category === category.id ? '#004f89' : '#6B7280'} 
+                        color={newAnnouncement.category === category.id ? '#2563EB' : '#6B7280'} 
                       />
                       <Text style={[
                         styles.categoryOptionText,
@@ -845,144 +596,144 @@ const Events = () => {
                   ))}
                 </View>
               </View>
+            </ScrollView>
+
+            <View style={styles.modernActions}>
+              <TouchableOpacity 
+                style={styles.modernCloseButton} 
+                onPress={() => { 
+                  if (!creating && !creatingConfirm) {
+                    closeCreateModal(); 
+                  }
+                }}
+                disabled={creating || creatingConfirm}
+              >
+                <Text style={styles.modernCloseButtonText}>Close</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={[
+                  styles.modernSaveButton,
+                  (creating || creatingConfirm || !newAnnouncement.title.trim() || !newAnnouncement.message.trim()) && styles.modernActionButtonDisabled
+                ]} 
+                onPress={() => {
+                  if (!creating && !creatingConfirm && newAnnouncement.title.trim() && newAnnouncement.message.trim()) {
+                    setCreateConfirmVisible(true);
+                  }
+                }}
+                disabled={creating || creatingConfirm || !newAnnouncement.title.trim() || !newAnnouncement.message.trim()}
+              >
+                <Text style={[
+                  styles.modernSaveButtonText,
+                  (creating || creatingConfirm || !newAnnouncement.title.trim() || !newAnnouncement.message.trim()) && styles.modernDisabledButtonText
+                ]}>
+                  Create
+                </Text>
+              </TouchableOpacity>
             </View>
-          </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
-          <View style={styles.modernActions}>
-            <TouchableOpacity 
-              style={styles.modernCloseButton} 
-              onPress={closeCreateModal}
-              disabled={creating}
-            >
-              <Text style={styles.modernCloseButtonText}>
-                Cancel
+      {/* Create Confirmation Modal */}
+      <Modal transparent animationType="fade" visible={createConfirmVisible} onRequestClose={() => !creatingConfirm && setCreateConfirmVisible(false)}>
+        <View style={styles.modalOverlayCenter}>
+          <View style={styles.fbModalCard}>
+            <View style={styles.fbModalContent}>
+              <Text style={styles.fbModalTitle}>Create announcement?</Text>
+              <Text style={styles.fbModalMessage}>Are you sure you want to create this announcement?</Text>
+            </View>
+            <View style={styles.fbModalButtonContainer}>
+              <TouchableOpacity 
+                style={[styles.fbModalCancelButton, creatingConfirm && styles.fbModalButtonDisabled]} 
+                onPress={() => !creatingConfirm && setCreateConfirmVisible(false)}
+                disabled={creatingConfirm}
+              >
+                <Text style={styles.fbModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[
+                  styles.fbModalConfirmButton, 
+                  { backgroundColor: '#004f89' },
+                  creatingConfirm && styles.fbModalButtonDisabled
+                ]} 
+                onPress={async () => {
+                  // Check network before creating
+                  const state = await NetInfo.fetch();
+                  if (!state.isConnected) {
+                    setCreateConfirmVisible(false);
+                    setFeedbackMessage('Cannot create announcement while offline. Please check your internet connection.');
+                    setFeedbackSuccess(false);
+                    setFeedbackVisible(true);
+                    setTimeout(() => setFeedbackVisible(false), 3000);
+                    return;
+                  }
+                  createAnnouncement();
+                }}
+                disabled={creatingConfirm}
+              >
+                <Text style={styles.fbModalConfirmText}>{creatingConfirm ? 'Creating...' : 'Confirm'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Delete Confirmation Modal */}
+      <Modal
+        transparent
+        animationType="fade"
+        visible={deleteConfirmVisible}
+        onRequestClose={() => !isDeleting && setDeleteConfirmVisible(false)}
+      >
+        <View style={styles.modalOverlayCenter}>
+          <View style={styles.fbModalCard}>
+            <View style={styles.fbModalContent}>
+              <Text style={styles.fbModalTitle}>Delete announcement?</Text>
+              <Text style={styles.fbModalMessage}>Are you sure you want to delete this announcement?</Text>
+            </View>
+            <View style={styles.fbModalButtonContainer}>
+              <TouchableOpacity 
+                style={[styles.fbModalCancelButton, isDeleting && styles.fbModalButtonDisabled]} 
+                onPress={() => !isDeleting && setDeleteConfirmVisible(false)}
+                disabled={isDeleting}
+              >
+                <Text style={styles.fbModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[
+                  styles.fbModalConfirmButton, 
+                  { backgroundColor: '#DC2626' },
+                  isDeleting && styles.fbModalButtonDisabled
+                ]} 
+                onPress={deleteAnnouncement}
+                disabled={isDeleting}
+              >
+                <Text style={styles.fbModalConfirmText}>{isDeleting ? 'Deleting...' : 'Delete'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Feedback Modal */}
+      <Modal transparent animationType="fade" visible={feedbackVisible} onRequestClose={() => setFeedbackVisible(false)}>
+        <View style={styles.modalOverlayCenter}>
+          <View style={styles.fbModalCard}>
+            <View style={styles.fbModalContent}>
+              <Text style={[styles.fbModalTitle, { 
+                color: feedbackMessage?.toLowerCase().includes('offline') ? '#8B0000' : (feedbackSuccess ? '#10B981' : '#DC2626')
+              }]}>
+                {feedbackMessage?.toLowerCase().includes('offline') ? 'No internet Connection' : (feedbackSuccess ? 'Success' : 'Notice')}
               </Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={[styles.modernSaveButton, creating && styles.modernSaveButtonDisabled]} 
-              onPress={handleCreatePress}
-              disabled={creating}
-            >
-              <Text style={styles.modernSaveButtonText}>
-                Create
-              </Text>
-            </TouchableOpacity>
+              <Text style={styles.fbModalMessage}>{feedbackMessage}</Text>
+            </View>
           </View>
         </View>
-      </View>
-    </Modal>
-
-    {/* Create Confirmation Modal */}
-    <Modal transparent animationType="fade" visible={createConfirmVisible} onRequestClose={() => setCreateConfirmVisible(false)}>
-      <View style={styles.modalOverlayCenter}>
-        <View style={styles.fbModalCard}>
-          <View style={styles.fbModalContent}>
-            <Text style={styles.fbModalTitle}>Create announcement?</Text>
-            <Text style={styles.fbModalMessage}>
-              Are you sure you want to create this announcement? It will be visible to all users.
-            </Text>
-          </View>
-          <View style={styles.fbModalButtonContainer}>
-            <TouchableOpacity 
-              style={[styles.fbModalCancelButton, creating && styles.fbModalButtonDisabled]} 
-              onPress={() => setCreateConfirmVisible(false)}
-              disabled={creating}
-            >
-              <Text style={styles.fbModalCancelText}>Close</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={[
-                styles.fbModalConfirmButton, 
-                { backgroundColor: '#004f89' },
-                creating && styles.fbModalButtonDisabled
-              ]} 
-              onPress={createAnnouncement}
-              disabled={creating}
-            >
-              <Text style={styles.fbModalConfirmText}>
-                {creating ? 'Creating...' : 'Confirm'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
-
-    {/* Delete Confirmation Modal (mirrored from Admin Alerts) */}
-    <Modal transparent animationType="fade" visible={deleteConfirmVisible} onRequestClose={() => setDeleteConfirmVisible(false)}>
-      <View style={styles.modalOverlayCenter}>
-        <View style={styles.fbModalCard}>
-          <View style={styles.fbModalContent}>
-            <Text style={styles.fbModalTitle}>Delete announcement?</Text>
-            <Text style={styles.fbModalMessage}>
-              Are you sure you want to delete this announcement? This cannot be undone.
-            </Text>
-          </View>
-          <View style={styles.fbModalButtonContainer}>
-            <TouchableOpacity 
-              style={[styles.fbModalCancelButton, isDeleting && styles.fbModalButtonDisabled]} 
-              onPress={() => setDeleteConfirmVisible(false)}
-              disabled={isDeleting}
-            >
-              <Text style={styles.fbModalCancelText}>Close</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={[
-                styles.fbModalConfirmButton, 
-                { backgroundColor: '#8B0000' },
-                isDeleting && styles.fbModalButtonDisabled
-              ]} 
-              onPress={deleteAnnouncement}
-              disabled={isDeleting}
-            >
-              <Text style={styles.fbModalConfirmText}>
-                {isDeleting ? 'Deleting...' : 'Confirm'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
-
-    {/* Feedback Modal (mirrored from Admin Alerts) */}
-    <Modal transparent animationType="fade" visible={feedbackVisible} onRequestClose={() => setFeedbackVisible(false)}>
-      <View style={styles.modalOverlayCenter}>
-        <View style={styles.fbModalCard}>
-          <View style={styles.fbModalContent}>
-            <Text style={[styles.fbModalTitle, { color: feedbackSuccess ? '#10B981' : '#DC2626' }]}>
-              {feedbackSuccess ? 'Success' : 'Error'}
-            </Text>
-            <Text style={styles.fbModalMessage}>{feedbackMessage}</Text>
-          </View>
-        </View>
-      </View>
-    </Modal>
-
-    {/* Network Error Modal */}
-    <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
-      <View style={styles.modalOverlayCenter}>
-        <View style={styles.fbModalCard}>
-          <View style={styles.fbModalContent}>
-            <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
-            {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
-          </View>
-        </View>
-      </View>
-    </Modal>
-
-    {/* Floating Create Button */}
-    <TouchableOpacity 
-      style={styles.floatingCreateButton}
-      onPress={openCreateModal}
-      activeOpacity={0.8}
-    >
-      <Ionicons name="add" size={28} color="#FFFFFF" />
-    </TouchableOpacity>
-  </>);
+      </Modal>
+    </>
+  );
 };
-
-// Define sidebar width outside component for use in styles
-const SIDEBAR_WIDTH = Dimensions.get('window').width * 0.6;
 
 const styles = StyleSheet.create({
   wrapper: { flex: 1, backgroundColor: '#F9FAFB' },
@@ -1046,23 +797,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#004f89',
     textAlign: 'center',
-  },
-  floatingCreateButton: {
-    position: 'absolute',
-    bottom: 20,
-    right: 16,
-    width: 56,
-    height: 56,
-    borderRadius: 8,
-    backgroundColor: '#004f89',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.3,
-    shadowOffset: { width: 0, height: 6 },
-    shadowRadius: 12,
-    elevation: 10,
-    zIndex: 1000,
   },
   
   // Announcements Section
@@ -1204,38 +938,27 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   
-  // Sidebar styles
-  sidebar: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    width: SIDEBAR_WIDTH,
-    backgroundColor: '#fff',
-    padding: 20,
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowOffset: { width: -5, height: 0 },
-    shadowRadius: 10,
-    zIndex: 10,
-    borderTopStartRadius: 15,
+  // Badge styles
+  badgeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
-  sidebarTitle: { fontSize: 25, fontWeight: 'bold', marginTop: 30, marginBottom: 20 },
-  sidebarItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
-  sidebarText: { fontSize: 16, marginLeft: 12 },
-  activeSidebarItem: {
-    backgroundColor: '#EFF6FF',
+  actionBadge: {
+    width: 36,
+    height: 36,
     borderRadius: 8,
-    marginVertical: 2,
+    backgroundColor: 'rgba(0,79,137,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  activeSidebarText: { color: '#2563EB', fontWeight: '600' },
-  logoutItem: { marginTop: 20 },
-  overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(17,24,39,0.25)', zIndex: 10 },
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 40 },
-   loadingText: { marginTop: 12, color: '#6B7280', fontSize: 16 },
+  actionBadgePinned: {
+    backgroundColor: '#004f89',
+  },
   
   // Modal styles
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  modalCard: { backgroundColor: '#fff', borderRadius: 8, padding: 24, width: '85%', maxWidth: 400, alignItems: 'center' },
+  modalCard: { backgroundColor: '#fff', borderRadius: 16, padding: 24, width: '85%', maxWidth: 400, alignItems: 'center' },
   modalIconWrap: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
   modalTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 8 },
   modalText: { fontSize: 16, color: '#6B7280', textAlign: 'center', marginBottom: 24 },
@@ -1244,8 +967,167 @@ const styles = StyleSheet.create({
   modalButtonText: { fontSize: 16, fontWeight: '600', color: '#6B7280' },
   modalButtonDanger: { backgroundColor: '#FEE2E2' },
   modalButtonDangerText: { color: '#b91c1c' },
+  modalButtonDisabled: {
+    opacity: 0.5,
+  },
+  modalButtonTextDisabled: {
+    opacity: 0.5,
+  },
   
-  // Modern Modal Styles (mirrored from Schedule.js)
+  // Create Modal Styles
+  createModalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    width: '90%',
+    maxWidth: 500,
+    maxHeight: '80%',
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 20,
+    elevation: 12,
+  },
+  createModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  createModalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  closeButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  createModalContent: {
+    padding: 20,
+    maxHeight: 400,
+  },
+  inputGroup: {
+    marginBottom: 20,
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 8,
+  },
+  textInput: {
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16,
+    color: '#111827',
+    backgroundColor: '#FFFFFF',
+  },
+  messageInput: {
+    height: 100,
+    textAlignVertical: 'top',
+  },
+  categorySelector: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  categoryOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: '#FFFFFF',
+    gap: 6,
+  },
+  categoryOptionSelected: {
+    borderColor: '#2563EB',
+    backgroundColor: '#EFF6FF',
+  },
+  categoryOptionText: {
+    fontSize: 12,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  categoryOptionTextSelected: {
+    color: '#2563EB',
+    fontWeight: '600',
+  },
+  createModalActions: {
+    flexDirection: 'row',
+    padding: 20,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    gap: 12,
+  },
+  cancelButton: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  createSubmitButton: {
+    flex: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2563EB',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    gap: 6,
+  },
+  createSubmitButtonDisabled: {
+    backgroundColor: '#9CA3AF',
+  },
+  createSubmitButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  
+  // 3-dot menu button (FAB)
+  menuFab: { 
+    position: 'absolute', 
+    bottom: 20, 
+    right: 20, 
+    width: 60, 
+    height: 60, 
+    borderRadius: 15, 
+    backgroundColor: '#004f89', 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    shadowColor: '#000', 
+    shadowOpacity: 0.2, 
+    shadowOffset: { width: 0, height: 4 }, 
+    shadowRadius: 5, 
+    elevation: 8 
+  },
+  
+  // Modern modal styles (matching Schedule.js)
   modernModalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.6)',
@@ -1265,12 +1147,10 @@ const styles = StyleSheet.create({
     elevation: 16,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.8)',
-    maxHeight: height * 0.85,
-    minHeight: height * 0.65,
   },
   modernModalHeader: {
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderTopLeftRadius: 8,
+    borderTopRightRadius: 8,
     overflow: 'hidden',
   },
   modernHeaderGradient: {
@@ -1337,143 +1217,57 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.15)',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-  },
-  modernInfoGrid: {
-    padding: 16,
-    paddingTop: 16,
-    backgroundColor: '#FAFBFC',
   },
   modernActions: {
     flexDirection: 'row',
-    padding: 16,
-    paddingTop: 8,
-    backgroundColor: '#FFFFFF',
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
-    gap: 8,
+    padding: 20,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    gap: 12,
   },
   modernCloseButton: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
-    paddingVertical: 16,
+    paddingVertical: 12,
     paddingHorizontal: 16,
     borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-    minHeight: 48,
-    minWidth: 0,
   },
   modernCloseButtonText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#475569',
-    letterSpacing: 0.3,
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#111827',
   },
   modernSaveButton: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#004f89',
-    paddingVertical: 16,
+    paddingVertical: 12,
     paddingHorizontal: 16,
     borderRadius: 8,
-    gap: 8,
-    flex: 1,
-    minHeight: 48,
-    minWidth: 0,
-    borderWidth: 1.5,
-    borderColor: '#004f89',
+    gap: 6,
   },
   modernSaveButtonText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#FFFFFF',
-    letterSpacing: 0.3,
-  },
-  modernSaveButtonDisabled: {
-    opacity: 0.5,
-  },
-  inputGroup: {
-    marginBottom: 20,
-  },
-  inputLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 8,
-  },
-  textInput: {
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
     fontSize: 16,
-    color: '#111827',
-    backgroundColor: '#FFFFFF',
-  },
-  messageInput: {
-    height: 100,
-    textAlignVertical: 'top',
-  },
-  categorySelector: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  categoryOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    backgroundColor: '#FFFFFF',
-    gap: 6,
-  },
-  categoryOptionSelected: {
-    borderColor: '#004f89',
-    backgroundColor: '#EFF6FF',
-  },
-  categoryOptionText: {
-    fontSize: 12,
-    color: '#6B7280',
-    fontWeight: '500',
-  },
-  categoryOptionTextSelected: {
-    color: '#004f89',
     fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  modernActionButtonDisabled: {
+    backgroundColor: '#9CA3AF',
+    opacity: 0.6,
+  },
+  modernDisabledButtonText: {
+    color: '#FFFFFF',
+    opacity: 0.8,
   },
   
-  // Badge styles
-  badgeContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  actionBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: 'rgba(0,79,137,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pinnedBadge: {
-    backgroundColor: '#004f89',
-  },
-  modalButtonDisabled: {
-    opacity: 0.5,
-  },
-  modalButtonTextDisabled: {
-    opacity: 0.5,
-  },
-  // Facebook-style confirm + feedback (mirrored from Admin Alerts)
+  // Facebook-style modal styles (matching Schedule.js)
   modalOverlayCenter: { 
     flex: 1, 
     backgroundColor: 'rgba(0,0,0,0.5)', 

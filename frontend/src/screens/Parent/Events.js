@@ -16,6 +16,8 @@ import { collection, query, getDocs, orderBy } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
 import { NetworkContext } from '../../contexts/NetworkContext';
 import { cacheAnnouncements, getCachedAnnouncements } from '../../offline/storage';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 
 const Events = () => {
   const { user } = useContext(AuthContext);
@@ -40,6 +42,8 @@ const Events = () => {
   const [announcements, setAnnouncements] = useState([]);
   const [announcementsLoading, setAnnouncementsLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState('all');
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
 
   // Card visual palette (matches admin dashboard card styling)
   const adminCardPalette = {
@@ -134,6 +138,24 @@ const Events = () => {
       setAnnouncementsLoading(false);
     }
   };
+
+  // Network monitoring
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     if (isFocused) loadAnnouncements();
@@ -299,6 +321,8 @@ const Events = () => {
             )}
         </View>
       </ScrollView>
+      
+      <OfflineBanner visible={showOfflineBanner} />
     </View>
 
     {/* Logout handled by unified header */}

@@ -59,21 +59,46 @@ export default function Conversation() {
     const loadCachedMessages = async () => {
       try {
         const cachedData = await getCachedConversationMessages(conversationId);
-        if (cachedData && Array.isArray(cachedData)) {
+        if (cachedData && Array.isArray(cachedData) && cachedData.length > 0) {
           // Convert timestamp objects back to proper format
-          const processedMessages = cachedData.map(msg => ({
-            ...msg,
-            createdAt: msg.createdAt?.toDate ? msg.createdAt : (typeof msg.createdAt === 'string' ? new Date(msg.createdAt) : msg.createdAt),
-          }));
+          const processedMessages = cachedData.map(msg => {
+            let createdAt = null;
+            if (msg.createdAt) {
+              if (typeof msg.createdAt.toDate === 'function') {
+                createdAt = msg.createdAt;
+              } else if (typeof msg.createdAt === 'object' && msg.createdAt.seconds) {
+                // Firestore timestamp format
+                createdAt = { toDate: () => new Date(msg.createdAt.seconds * 1000), toMillis: () => msg.createdAt.seconds * 1000 };
+              } else if (typeof msg.createdAt === 'number') {
+                createdAt = new Date(msg.createdAt);
+              } else if (typeof msg.createdAt === 'string') {
+                createdAt = new Date(msg.createdAt);
+              }
+            }
+            return {
+              ...msg,
+              createdAt: createdAt || msg.createdAt,
+            };
+          });
           setMessages(processedMessages);
+          console.log(`✅ Loaded ${processedMessages.length} cached message(s) for offline viewing`);
           // If offline, use cached data and return early
           if (!isConnected) {
             console.log('📴 Offline mode - using cached messages');
             return;
           }
+        } else if (!isConnected) {
+          // Offline but no cached data
+          console.log('📴 Offline mode - no cached messages found');
+          setMessages([]);
+          return;
         }
       } catch (error) {
         console.log('Error loading cached messages:', error);
+        if (!isConnected) {
+          setMessages([]);
+          return;
+        }
       }
     };
     
@@ -86,6 +111,8 @@ export default function Conversation() {
         if (queued && queued.length > 0) {
           setQueuedMessages(queued);
           console.log(`📬 Loaded ${queued.length} queued message(s)`);
+        } else {
+          setQueuedMessages([]);
         }
       } catch (error) {
         console.log('Error loading queued messages:', error);

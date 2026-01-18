@@ -7,6 +7,8 @@ import { collection, query, orderBy, onSnapshot, addDoc, doc, setDoc, serverTime
 import { db } from '../../utils/firebaseConfig';
 import { NetworkContext } from '../../contexts/NetworkContext';
 import { cacheConversationMessages, getCachedConversationMessages, queuePendingMessage, getPendingMessages, removePendingMessage, clearPendingMessages } from '../../offline/storage';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 
 export default function Conversation() {
   const route = useRoute();
@@ -29,6 +31,8 @@ export default function Conversation() {
   const [selectedMessageId, setSelectedMessageId] = useState(null);
   const [pendingMessage, setPendingMessage] = useState(null);
   const [queuedMessages, setQueuedMessages] = useState([]);
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
 
   const displayName = String((studentName || '').trim()) || 'Student';
 
@@ -40,6 +44,24 @@ export default function Conversation() {
     return `${sid}-${pid}`;
   }, [user?.uid, user?.parentId, studentId, studentIdNumber]);
 
+  // Network monitoring
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   useEffect(() => {
     if (!conversationId) { setMessages([]); return; }
     
@@ -47,21 +69,46 @@ export default function Conversation() {
     const loadCachedMessages = async () => {
       try {
         const cachedData = await getCachedConversationMessages(conversationId);
-        if (cachedData && Array.isArray(cachedData)) {
+        if (cachedData && Array.isArray(cachedData) && cachedData.length > 0) {
           // Convert timestamp objects back to proper format
-          const processedMessages = cachedData.map(msg => ({
-            ...msg,
-            createdAt: msg.createdAt?.toDate ? msg.createdAt : (typeof msg.createdAt === 'string' ? new Date(msg.createdAt) : msg.createdAt),
-          }));
+          const processedMessages = cachedData.map(msg => {
+            let createdAt = null;
+            if (msg.createdAt) {
+              if (typeof msg.createdAt.toDate === 'function') {
+                createdAt = msg.createdAt;
+              } else if (typeof msg.createdAt === 'object' && msg.createdAt.seconds) {
+                // Firestore timestamp format
+                createdAt = { toDate: () => new Date(msg.createdAt.seconds * 1000), toMillis: () => msg.createdAt.seconds * 1000 };
+              } else if (typeof msg.createdAt === 'number') {
+                createdAt = new Date(msg.createdAt);
+              } else if (typeof msg.createdAt === 'string') {
+                createdAt = new Date(msg.createdAt);
+              }
+            }
+            return {
+              ...msg,
+              createdAt: createdAt || msg.createdAt,
+            };
+          });
           setMessages(processedMessages);
+          console.log(`✅ Loaded ${processedMessages.length} cached message(s) for offline viewing`);
           // If offline, use cached data and return early
           if (!isConnected) {
             console.log('📴 Offline mode - using cached messages');
             return;
           }
+        } else if (!isConnected) {
+          // Offline but no cached data
+          console.log('📴 Offline mode - no cached messages found');
+          setMessages([]);
+          return;
         }
       } catch (error) {
         console.log('Error loading cached messages:', error);
+        if (!isConnected) {
+          setMessages([]);
+          return;
+        }
       }
     };
     
@@ -74,6 +121,8 @@ export default function Conversation() {
         if (queued && queued.length > 0) {
           setQueuedMessages(queued);
           console.log(`📬 Loaded ${queued.length} queued message(s)`);
+        } else {
+          setQueuedMessages([]);
         }
       } catch (error) {
         console.log('Error loading queued messages:', error);
@@ -457,6 +506,8 @@ export default function Conversation() {
           </View>
         </View>
       </Modal>
+      
+      <OfflineBanner visible={showOfflineBanner} />
     </View>
   );
 }
@@ -542,5 +593,4 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
 });
-
 

@@ -17,6 +17,7 @@ import { doc, updateDoc, getDoc, query, collection, where, getDocs, onSnapshot, 
 import { db } from '../../utils/firebaseConfig';
 import { deleteAllUserConversations } from '../../utils/conversationUtils';
 import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
+import NetInfo from '@react-native-community/netinfo';
 import AdminTopHeader from './AdminTopHeader';
 
 const StudentProfile = () => {
@@ -53,6 +54,7 @@ const StudentProfile = () => {
   const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
   const [verifyConfirmVisible, setVerifyConfirmVisible] = useState(false);
   const [verifyingAccount, setVerifyingAccount] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
   const [editedData, setEditedData] = useState({
     firstName: student?.firstName || '',
     middleName: student?.middleName || '',
@@ -903,6 +905,20 @@ const StudentProfile = () => {
       return;
     }
 
+    // Check if offline
+    const netState = await NetInfo.fetch();
+    if (!netState.isConnected || !netState.isInternetReachable) {
+      setConfirmVisible(false);
+      setFeedbackTitle('No internet Connection');
+      setFeedbackMessage('Cannot save changes while offline. Please check your internet connection.');
+      setFeedbackTextColor('#8B0000');
+      setFeedbackVisible(true);
+      setTimeout(() => {
+        setFeedbackVisible(false);
+      }, 3000);
+      return;
+    }
+
     // Validate all fields before saving
     const errors = {};
     const fieldsToValidate = ['firstName', 'lastName', 'middleName', 'course', 'section', 'yearLevel', 'email', 'contactNumber', 'gender', 'birthday', 'address'];
@@ -1458,7 +1474,19 @@ const StudentProfile = () => {
                   { backgroundColor: '#8B0000' },
                   deletingAccount && styles.fbModalButtonDisabled
                 ]} 
-                onPress={async () => { 
+                onPress={async () => {
+                  // Check if offline
+                  const netState = await NetInfo.fetch();
+                  if (!netState.isConnected || !netState.isInternetReachable) {
+                    setDeleteConfirmVisible(false);
+                    setFeedbackTitle('No internet Connection');
+                    setFeedbackMessage('Cannot delete student account while offline. Please check your internet connection.');
+                    setFeedbackTextColor('#8B0000');
+                    setFeedbackVisible(true);
+                    setTimeout(() => setFeedbackVisible(false), 3000);
+                    return;
+                  }
+
                   if (!deletingAccount) {
                     await deleteStudentAccount();
                   }
@@ -1498,7 +1526,20 @@ const StudentProfile = () => {
                   { backgroundColor: '#004f89' },
                   verifyingAccount && styles.fbModalButtonDisabled
                 ]} 
-                onPress={verifyStudentAccount}
+                onPress={async () => {
+                  // Check if offline
+                  const netState = await NetInfo.fetch();
+                  if (!netState.isConnected || !netState.isInternetReachable) {
+                    setVerifyConfirmVisible(false);
+                    setFeedbackTitle('No internet Connection');
+                    setFeedbackMessage('Cannot verify student account while offline. Please check your internet connection.');
+                    setFeedbackTextColor('#8B0000');
+                    setFeedbackVisible(true);
+                    setTimeout(() => setFeedbackVisible(false), 3000);
+                    return;
+                  }
+                  verifyStudentAccount();
+                }}
                 disabled={verifyingAccount}
               >
                 <Text style={styles.fbModalConfirmText}>
@@ -1954,4 +1995,3 @@ const styles = StyleSheet.create({
 });
 
 export default StudentProfile;
-

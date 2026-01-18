@@ -1,4 +1,4 @@
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useEffect } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,8 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { PARENT_TAB_BAR_STYLE } from '../../navigation/tabStyles';
 import { Ionicons } from '@expo/vector-icons';
 import { AuthContext } from '../../contexts/AuthContext';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 
 const AboutLogo = require('../../assets/logo.png');
 
@@ -36,6 +38,7 @@ const About = () => {
   );
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [logoutVisible, setLogoutVisible] = useState(false);
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
   const sidebarWidth = Math.min(width * 0.75, 300);
   const sidebarAnimRight = useState(new Animated.Value(-sidebarWidth))[0];
 
@@ -56,6 +59,21 @@ const About = () => {
   };
   const cancelLogout = () => setLogoutVisible(false);
 
+  // Network monitoring
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!connected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!connected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   return (
     <View style={styles.wrapper}>
@@ -146,6 +164,8 @@ const About = () => {
       </ScrollView>
       
       {/* Logout handled by unified header */}
+      
+      <OfflineBanner visible={showOfflineBanner} />
     </View>
   );
 };

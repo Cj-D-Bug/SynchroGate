@@ -18,6 +18,9 @@ import { doc, getDoc, setDoc, onSnapshot, deleteDoc, getDocFromServer } from 'fi
 import * as Notifications from 'expo-notifications';
 import { db } from '../../utils/firebaseConfig';
 import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
+import { fetchWithCache, isNetworkError } from '../../utils/offlineCache';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 const AboutLogo = require('../../assets/logo.png');
 
 const { width } = Dimensions.get('window');
@@ -36,10 +39,8 @@ export default function NotificationLog() {
   const [feedbackVisible, setFeedbackVisible] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [feedbackSuccess, setFeedbackSuccess] = useState(true);
-  const [networkErrorVisible, setNetworkErrorVisible] = useState(false);
-  const [networkErrorTitle, setNetworkErrorTitle] = useState('');
-  const [networkErrorMessage, setNetworkErrorMessage] = useState('');
-  const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
   const [detailVisible, setDetailVisible] = useState(false);
   const [detailStudents, setDetailStudents] = useState([]);
   const [detailAlert, setDetailAlert] = useState(null);
@@ -78,37 +79,37 @@ export default function NotificationLog() {
   const loadLogs = async () => {
     try {
       setLoading(true);
-      const ref = doc(db, 'admin_activity_logs', 'global');
-      let snap;
-      try {
-        snap = await getDocFromServer(ref);
-      } catch {
-        snap = await getDoc(ref);
+      const { data, fromCache } = await fetchWithCache('admin_activity_logs', async () => {
+        const ref = doc(db, 'admin_activity_logs', 'global');
+        let snap;
+        try {
+          snap = await getDocFromServer(ref);
+        } catch {
+          snap = await getDoc(ref);
+        }
+        const items = snap.exists() ? (Array.isArray(snap.data()?.items) ? snap.data().items : []) : [];
+        return items.map(item => ({
+          alertId: item.id,
+          alertType: item.type || 'general',
+          title: item.title || 'Activity',
+          message: item.message || '',
+          createdAt: item.createdAt || new Date().toISOString(),
+          status: item.status || 'read',
+          students: Array.isArray(item.students) ? item.students : [],
+          parent: item.parent || null,
+          student: item.student || null,
+        })).sort((a,b)=> new Date(b.createdAt) - new Date(a.createdAt));
+      });
+      setAlerts(data);
+      if (fromCache) {
+        console.log('Loaded activity logs from offline cache');
+        setShowOfflineBanner(true);
       }
-      const items = snap.exists() ? (Array.isArray(snap.data()?.items) ? snap.data().items : []) : [];
-      const mapped = items.map(item => ({
-        alertId: item.id,
-        alertType: item.type || 'general',
-        title: item.title || 'Activity',
-        message: item.message || '',
-        createdAt: item.createdAt || new Date().toISOString(),
-        status: item.status || 'read',
-        students: Array.isArray(item.students) ? item.students : [],
-        parent: item.parent || null,
-        student: item.student || null,
-      })).sort((a,b)=> new Date(b.createdAt) - new Date(a.createdAt));
-      setAlerts(mapped);
       // No write-backs here to avoid exceeding write quotas
     } catch (e) {
       console.error('Error loading logs:', e);
-      // Only show network error modal for actual network errors
-      if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
+      if (isNetworkError(e)) {
+        setShowOfflineBanner(true);
       }
     } finally {
       setLoading(false);
@@ -116,6 +117,15 @@ export default function NotificationLog() {
   };
 
   const markAllAsRead = async () => {
+    // Check if offline
+    if (!isOnline) {
+      setFeedbackMessage('Cannot mark as read while offline. Please check your internet connection.');
+      setFeedbackSuccess(false);
+      setFeedbackVisible(true);
+      setTimeout(() => setFeedbackVisible(false), 3000);
+      return;
+    }
+
     try {
       setMarkingAsRead(true);
       const ref = doc(db, 'admin_activity_logs', 'global');
@@ -127,14 +137,12 @@ export default function NotificationLog() {
       }
     } catch (error) {
       console.error('Error marking all as read:', error);
-      // Only show network error modal for actual network errors
-      if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
+      if (isNetworkError(error)) {
+        setShowOfflineBanner(true);
+        setFeedbackMessage('Cannot mark as read while offline. Please check your internet connection.');
+        setFeedbackSuccess(false);
+        setFeedbackVisible(true);
+        setTimeout(() => setFeedbackVisible(false), 3000);
       } else {
         // Avoid showing a blocking modal for mark-all-as-read; log instead
         console.warn('Failed to mark admin activity logs as read:', error);
@@ -147,6 +155,24 @@ export default function NotificationLog() {
   const changeFilter = (next) => {
     if (next === 'all' || next === 'unread' || next === 'read') setFilter(next);
   };
+
+  // Monitor network connectivity
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const isConnected = state.isConnected && state.isInternetReachable;
+      setIsOnline(isConnected);
+      setShowOfflineBanner(!isConnected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const isConnected = state.isConnected && state.isInternetReachable;
+      setIsOnline(isConnected);
+      setShowOfflineBanner(!isConnected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => { loadLogs(); }, []);
   // Safety: never let loading hang due to any unexpected async behavior
@@ -192,13 +218,8 @@ export default function NotificationLog() {
       }
     }, (error) => {
       console.error('Error in admin activity logs snapshot:', error);
-      const errorInfo = getNetworkErrorMessage(error);
-      if (error?.code?.includes('unavailable') || error?.code?.includes('deadline-exceeded') || error?.message?.toLowerCase().includes('network') || error?.message?.toLowerCase().includes('connection')) {
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
+      if (isNetworkError(error)) {
+        setShowOfflineBanner(true);
       }
       setLoading(false);
     });
@@ -228,6 +249,7 @@ export default function NotificationLog() {
 
   return (<>
     <View style={styles.wrapper}>
+      <OfflineBanner visible={showOfflineBanner} />
       <Modal transparent visible={sidebarOpen} animationType="fade" onRequestClose={() => toggleSidebar(false)}>
         <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => toggleSidebar(false)} />
         <Animated.View style={[styles.sidebar, { right: sidebarAnimRight }]}>
@@ -418,7 +440,19 @@ export default function NotificationLog() {
                   >
                     <Ionicons name="mail-outline" size={18} color="#004f89" />
                   </TouchableOpacity>
-                  <TouchableOpacity onPress={() => setDeleteConfirmVisible(true)} style={[styles.actionPill, { marginRight: 0 }]}>
+                  <TouchableOpacity 
+                    onPress={() => {
+                      if (!isOnline) {
+                        setFeedbackMessage('Cannot delete activity logs while offline. Please check your internet connection.');
+                        setFeedbackSuccess(false);
+                        setFeedbackVisible(true);
+                        setTimeout(() => setFeedbackVisible(false), 3000);
+                        return;
+                      }
+                      setDeleteConfirmVisible(true);
+                    }} 
+                    style={[styles.actionPill, { marginRight: 0 }]}
+                  >
                     <Ionicons name="trash-outline" size={18} color="#004f89" />
                   </TouchableOpacity>
                 </View>
@@ -453,6 +487,15 @@ export default function NotificationLog() {
               const createdLabel = new Date(alert.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
               const isUnread = alert.status === 'unread';
               const onPress = async () => {
+                // Check if offline
+                if (!isOnline) {
+                  setFeedbackMessage('Cannot mark as read while offline. Please check your internet connection.');
+                  setFeedbackSuccess(false);
+                  setFeedbackVisible(true);
+                  setTimeout(() => setFeedbackVisible(false), 3000);
+                  return;
+                }
+
                 try {
                   // Mark as read
                   const ref = doc(db, 'admin_activity_logs', 'global');
@@ -464,14 +507,12 @@ export default function NotificationLog() {
                   }
                 } catch (e) {
                   console.error('Error marking activity as read:', e);
-                  // Only show network error modal for actual network errors
-                  if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-                    const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-                    setNetworkErrorTitle(errorInfo.title);
-                    setNetworkErrorMessage(errorInfo.message);
-                    setNetworkErrorColor(errorInfo.color);
-                    setNetworkErrorVisible(true);
-                    setTimeout(() => setNetworkErrorVisible(false), 5000);
+                  if (isNetworkError(e)) {
+                    setShowOfflineBanner(true);
+                    setFeedbackMessage('Cannot mark as read while offline. Please check your internet connection.');
+                    setFeedbackSuccess(false);
+                    setFeedbackVisible(true);
+                    setTimeout(() => setFeedbackVisible(false), 3000);
                   }
                 }
               };
@@ -543,6 +584,17 @@ export default function NotificationLog() {
               hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
               onPress={async () => {
                 if (deleting) return;
+
+                // Check if offline
+                if (!isOnline) {
+                  setDeleteConfirmVisible(false);
+                  setFeedbackMessage('Cannot delete activity logs while offline. Please check your internet connection.');
+                  setFeedbackSuccess(false);
+                  setFeedbackVisible(true);
+                  setTimeout(() => setFeedbackVisible(false), 3000);
+                  return;
+                }
+
                 setDeleting(true);
                 try {
                   const ref = doc(db, 'admin_activity_logs', 'global');
@@ -559,14 +611,8 @@ export default function NotificationLog() {
                   }, 3000);
                 } catch (e) {
                   console.error('Error deleting activity logs:', e);
-                  // Only show network error modal for actual network errors
-                  if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-                    const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-                    setNetworkErrorTitle(errorInfo.title);
-                    setNetworkErrorMessage(errorInfo.message);
-                    setNetworkErrorColor(errorInfo.color);
-                    setNetworkErrorVisible(true);
-                    setTimeout(() => setNetworkErrorVisible(false), 5000);
+                  if (isNetworkError(e)) {
+                    setShowOfflineBanner(true);
                   } else {
                     try {
                       // Fallback: if delete is not permitted, clear items array instead
@@ -581,13 +627,8 @@ export default function NotificationLog() {
                         setFeedbackVisible(false);
                       }, 3000);
                     } catch (fallbackError) {
-                      const fallbackErrorInfo = getNetworkErrorMessage(fallbackError);
-                      if (fallbackError.type === 'no_internet' || fallbackError.type === 'timeout' || fallbackError.type === 'unstable_connection') {
-                        setNetworkErrorTitle(fallbackErrorInfo.title);
-                        setNetworkErrorMessage(fallbackErrorInfo.message);
-                        setNetworkErrorColor(fallbackErrorInfo.color);
-                        setNetworkErrorVisible(true);
-                        setTimeout(() => setNetworkErrorVisible(false), 5000);
+                      if (isNetworkError(fallbackError)) {
+                        setShowOfflineBanner(true);
                       } else {
                         setFeedbackMessage('Failed to delete activity logs');
                         setFeedbackSuccess(false);
@@ -655,22 +696,12 @@ export default function NotificationLog() {
       <View style={styles.modalOverlayCenter}>
         <View style={styles.fbModalCard}>
           <View style={styles.fbModalContent}>
-            <Text style={[styles.fbModalTitle, { color: feedbackSuccess ? '#10B981' : '#DC2626' }]}>
-              {feedbackSuccess ? 'Success' : 'Error'}
+            <Text style={[styles.fbModalTitle, { 
+              color: feedbackMessage?.toLowerCase().includes('offline') ? '#8B0000' : (feedbackSuccess ? '#10B981' : '#DC2626')
+            }]}>
+              {feedbackMessage?.toLowerCase().includes('offline') ? 'No internet Connection' : (feedbackSuccess ? 'Success' : 'Error')}
             </Text>
             <Text style={styles.fbModalMessage}>{feedbackMessage}</Text>
-          </View>
-        </View>
-      </View>
-    </Modal>
-
-    {/* Network Error Modal */}
-    <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
-      <View style={styles.modalOverlayCenter}>
-        <View style={styles.fbModalCard}>
-          <View style={styles.fbModalContent}>
-            <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
-            {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
           </View>
         </View>
       </View>

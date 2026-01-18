@@ -14,6 +14,8 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { AuthContext } from '../../contexts/AuthContext';
 import sidebarEventEmitter from '../../utils/sidebarEventEmitter';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 
 const AboutLogo = require('../../assets/logo.png');
 
@@ -24,6 +26,7 @@ const About = () => {
   const { logout } = useContext(AuthContext);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [logoutVisible, setLogoutVisible] = useState(false);
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
   const sidebarWidth = Math.min(width * 0.75, 300);
   const sidebarAnimRight = useState(new Animated.Value(-sidebarWidth))[0];
 
@@ -55,6 +58,22 @@ const About = () => {
     setSidebarOpen(open);
   };
 
+  // Monitor network connectivity
+  React.useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const isConnected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!isConnected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const isConnected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!isConnected);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   React.useEffect(() => {
     const handleToggleSidebar = () => toggleSidebar(!sidebarOpen);
     sidebarEventEmitter.on('toggleSidebar', handleToggleSidebar);
@@ -73,6 +92,7 @@ const About = () => {
 
   return (
     <View style={styles.wrapper}>
+      <OfflineBanner visible={showOfflineBanner} />
       {/* Sidebar Modal */}
       <Modal transparent visible={sidebarOpen} animationType="fade" onRequestClose={() => toggleSidebar(false)}>
         <TouchableOpacity

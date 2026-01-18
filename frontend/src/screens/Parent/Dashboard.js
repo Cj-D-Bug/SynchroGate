@@ -23,6 +23,8 @@ import { collection, query, where, getDocs, doc, getDoc, orderBy, onSnapshot } f
 import { db } from '../../utils/firebaseConfig';
 import { cacheDashboardData, getCachedDashboardData, cacheLinkedStudents, getCachedLinkedStudents } from '../../offline/storage';
 import { wp, hp, fontSizes, responsiveStyles, getResponsiveDimensions } from '../../utils/responsive';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 
 const { width } = Dimensions.get('window');
 const dimensions = getResponsiveDimensions();
@@ -52,6 +54,7 @@ const Dashboard = () => {
   const [latestEvents, setLatestEvents] = useState([]);
   const [upcomingIndex, setUpcomingIndex] = useState(0);
   const [upcomingContainerWidth, setUpcomingContainerWidth] = useState(width - 56);
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
   const [isLandscape, setIsLandscape] = useState(dimensions.isLandscape);
 
   const scannedInTodayCount = useMemo(() => {
@@ -167,7 +170,7 @@ const Dashboard = () => {
         return; 
       }
       
-      // Try to load cached data first (works offline) - following same pattern as Student screens
+      // Always try to load cached data first (for immediate display)
       const loadCachedData = async () => {
         try {
           const cachedLinkedStudents = await getCachedLinkedStudents(user.uid);
@@ -182,10 +185,10 @@ const Dashboard = () => {
               linkedAt: s.linkedAt || new Date().toISOString()
             }));
             setStudents(formatted);
-            console.log('✅ Linked students loaded from cache (offline mode)');
+            console.log('✅ Linked students loaded from cache');
+            setStudentsLoading(false);
             // If offline, use cached data and return early
             if (!isConnected) {
-              setStudentsLoading(false);
               return true; // Indicate cached data was loaded
             }
           }
@@ -202,7 +205,9 @@ const Dashboard = () => {
       
       // Only fetch from Firestore if online
       if (!isConnected) {
-        setStudentsLoading(false);
+        if (!cachedLoaded) {
+          setStudentsLoading(false);
+        }
         return;
       }
       
@@ -654,6 +659,22 @@ const Dashboard = () => {
     };
     if (isFocused) load();
   }, [isFocused, isConnected]);
+
+  // Network monitoring
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!connected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!connected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -1190,6 +1211,8 @@ const Dashboard = () => {
         )}
         
       </ScrollView>
+      
+      <OfflineBanner visible={showOfflineBanner} />
     </View>
     </ErrorBoundary>
     <Modal
@@ -1877,4 +1900,5 @@ const styles = StyleSheet.create({
   },
   centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', minHeight: 500, marginTop: -50 },
 });
+
 export default Dashboard;

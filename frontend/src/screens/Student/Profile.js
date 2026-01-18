@@ -20,7 +20,8 @@ import { STUDENT_TAB_BAR_STYLE } from '../../navigation/tabStyles';
 import avatarEventEmitter from '../../utils/avatarEventEmitter';
 import { query, collection, where, getDocs } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
-import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 
 const Profile = ({ navigation }) => {
   const { user, loading, refreshUserData } = useContext(AuthContext);
@@ -34,10 +35,8 @@ const Profile = ({ navigation }) => {
   const [modalVisible, setModalVisible] = useState(false);
   const [activeType, setActiveType] = useState(null);
   const [linkedParents, setLinkedParents] = useState([]);
-  const [networkErrorVisible, setNetworkErrorVisible] = useState(false);
-  const [networkErrorTitle, setNetworkErrorTitle] = useState('');
-  const [networkErrorMessage, setNetworkErrorMessage] = useState('');
-  const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
 
   // Hide student tab while focused and restore on blur
   useFocusEffect(
@@ -145,15 +144,6 @@ const Profile = ({ navigation }) => {
         setLinkedParents(uniqueParents);
       } catch (error) {
         console.error("Error checking linked parents:", error);
-        // Only show network error modal for actual network errors
-        if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-          const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-          setNetworkErrorTitle(errorInfo.title);
-          setNetworkErrorMessage(errorInfo.message);
-          setNetworkErrorColor(errorInfo.color);
-          setNetworkErrorVisible(true);
-          setTimeout(() => setNetworkErrorVisible(false), 5000);
-        }
         setLinkedParents([]);
       }
     };
@@ -397,17 +387,7 @@ const Profile = ({ navigation }) => {
         </View>
       </Modal>
 
-      {/* Network Error Modal */}
-      <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
-        <View style={styles.modalOverlayCenter}>
-          <View style={styles.fbModalCard}>
-            <View style={styles.fbModalContent}>
-              <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
-              {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <OfflineBanner visible={showOfflineBanner} />
     </View>
   );
 };

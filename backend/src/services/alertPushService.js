@@ -580,11 +580,15 @@ const initializeStudentAlertsListener = () => {
             console.log(`⏭️ [LISTENER] SKIP - student ${studentId} is NOT LOGGED IN or INACTIVE`);
           }
           
-          // CRITICAL: Skip parent notifications for schedule_permission_response alerts
+          // CRITICAL: Skip parent notifications for schedule_permission_response and link_response alerts
           // These are responses FROM parents TO students, so parents don't need to be notified
           const alertType = alert.type || alert.alertType || '';
           if (alertType.toLowerCase() === 'schedule_permission_response') {
             console.log(`⏭️ [LISTENER] SKIP - schedule_permission_response alert (parent-to-student response) - not sending to parents`);
+            continue;
+          }
+          if (alertType.toLowerCase() === 'link_response') {
+            console.log(`⏭️ [LISTENER] SKIP - link_response alert (parent-to-student response) - not sending to parents`);
             continue;
           }
           

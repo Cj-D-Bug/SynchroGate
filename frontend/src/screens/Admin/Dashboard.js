@@ -18,8 +18,11 @@ import { getLinkedStudents } from '../../api/student';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
 import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
+import { fetchWithCache, isNetworkError, getCacheData } from '../../utils/offlineCache';
 import { wp, hp, fontSizes, responsiveStyles, getResponsiveDimensions } from '../../utils/responsive';
 import sidebarEventEmitter from '../../utils/sidebarEventEmitter';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 const AboutLogo = require('../../assets/logo.png');
 
 const { width } = Dimensions.get('window');
@@ -43,10 +46,7 @@ const AdminDashboard = () => {
   const [totalStudentsCount, setTotalStudentsCount] = useState(0);
   const [totalParentsCount, setTotalParentsCount] = useState(0);
   const [announcementsCount, setAnnouncementsCount] = useState(0);
-  const [networkErrorVisible, setNetworkErrorVisible] = useState(false);
-  const [networkErrorTitle, setNetworkErrorTitle] = useState('');
-  const [networkErrorMessage, setNetworkErrorMessage] = useState('');
-  const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
 
   const sidebarWidth = Math.min(wp(75), 300);
   const sidebarAnimRight = useState(new Animated.Value(-sidebarWidth))[0];
@@ -153,27 +153,61 @@ const AdminDashboard = () => {
       setStudentsLoading(true);
       try {
         setError(null);
-        const data = await getLinkedStudents('admin');
+        
+        // Check network status first
+        const netState = await NetInfo.fetch();
+        const isOnline = netState.isConnected && netState.isInternetReachable;
+        
+        if (!isOnline) {
+          // If offline, try to load from cache directly
+          const cachedData = await getCacheData('admin_dashboard_students');
+          if (cachedData) {
+            setStudents(Array.isArray(cachedData) ? cachedData : []);
+            console.log('Loaded students from offline cache');
+            return;
+          }
+        }
+        
+        // Try to fetch fresh data with cache fallback
+        const { data, fromCache } = await fetchWithCache('admin_dashboard_students', async () => {
+          return await getLinkedStudents('admin');
+        });
         setStudents(Array.isArray(data) ? data : []);
+        if (fromCache) {
+          console.log('Loaded students from offline cache');
+        }
       } catch (err) {
         console.error('Error fetching students:', err);
-        // Only show network error modal for actual network errors
-        if (err?.code?.includes('unavailable') || err?.code?.includes('network') || err?.message?.toLowerCase().includes('network')) {
-          const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: err.message });
-          setNetworkErrorTitle(errorInfo.title);
-          setNetworkErrorMessage(errorInfo.message);
-          setNetworkErrorColor(errorInfo.color);
-          setNetworkErrorVisible(true);
-          setTimeout(() => setNetworkErrorVisible(false), 5000);
+        // Try to load from cache as last resort
+        const cachedData = await getCacheData('admin_dashboard_students');
+        if (cachedData) {
+          setStudents(Array.isArray(cachedData) ? cachedData : []);
+          console.log('Loaded students from cache after error');
         } else {
           setError('Failed to load students. Please try again.');
+          setStudents([]);
         }
-        setStudents([]);
       } finally {
         setStudentsLoading(false);
         setLoading(false);
       }
     };
+
+  // Monitor network connectivity
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const isConnected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!isConnected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const isConnected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!isConnected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     fetchStudents();
@@ -195,48 +229,76 @@ const AdminDashboard = () => {
   // Fetch total counts and compute unlinked counts
   const fetchAllCounts = async () => {
     try {
-      const usersRef = collection(db, 'users');
-      const studentsQ = query(usersRef, where('role', '==', 'student'));
-      const parentsQ = query(usersRef, where('role', '==', 'parent'));
-      const [studentsSnap, parentsSnap] = await Promise.all([
-        getDocs(studentsQ),
-        getDocs(parentsQ),
-      ]);
+      // Check network status first
+      const netState = await NetInfo.fetch();
+      const isOnline = netState.isConnected && netState.isInternetReachable;
+      
+      if (!isOnline) {
+        // If offline, try to load from cache directly
+        const cachedData = await getCacheData('admin_dashboard_counts');
+        if (cachedData) {
+          setTotalStudentsCount(cachedData.totalStudents || 0);
+          setTotalParentsCount(cachedData.totalParents || 0);
+          setUnlinkedStudentsCount(cachedData.unlinkedStudents || 0);
+          setUnlinkedParentsCount(cachedData.unlinkedParents || 0);
+          console.log('Loaded counts from offline cache');
+          return;
+        }
+      }
+      
+      const { data, fromCache } = await fetchWithCache('admin_dashboard_counts', async () => {
+        const usersRef = collection(db, 'users');
+        const studentsQ = query(usersRef, where('role', '==', 'student'));
+        const parentsQ = query(usersRef, where('role', '==', 'parent'));
+        const [studentsSnap, parentsSnap] = await Promise.all([
+          getDocs(studentsQ),
+          getDocs(parentsQ),
+        ]);
 
-      const allStudents = studentsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-      const allParents = parentsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const allStudents = studentsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const allParents = parentsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-      // Set total counts
-      setTotalStudentsCount(allStudents.length);
-      setTotalParentsCount(allParents.length);
+        const linksRef = collection(db, 'parent_student_links');
+        const activeLinksQ = query(linksRef, where('status', '==', 'active'));
+        const linksSnap = await getDocs(activeLinksQ);
 
-      const linksRef = collection(db, 'parent_student_links');
-      const activeLinksQ = query(linksRef, where('status', '==', 'active'));
-      const linksSnap = await getDocs(activeLinksQ);
+        const linkedStudentIds = new Set();
+        const linkedParentIds = new Set();
+        linksSnap.docs.forEach(linkDoc => {
+          const link = linkDoc.data();
+          if (link?.studentId) linkedStudentIds.add(link.studentId);
+          if (link?.parentId) linkedParentIds.add(link.parentId);
+        });
 
-      const linkedStudentIds = new Set();
-      const linkedParentIds = new Set();
-      linksSnap.docs.forEach(linkDoc => {
-        const link = linkDoc.data();
-        if (link?.studentId) linkedStudentIds.add(link.studentId);
-        if (link?.parentId) linkedParentIds.add(link.parentId);
+        const unlinkedStudents = allStudents.filter(s => !linkedStudentIds.has(s.uid || s.id));
+        const unlinkedParents = allParents.filter(p => !linkedParentIds.has(p.uid || p.id));
+
+        return {
+          totalStudents: allStudents.length,
+          totalParents: allParents.length,
+          unlinkedStudents: unlinkedStudents.length,
+          unlinkedParents: unlinkedParents.length,
+        };
       });
 
-      const unlinkedStudents = allStudents.filter(s => !linkedStudentIds.has(s.uid || s.id));
-      const unlinkedParents = allParents.filter(p => !linkedParentIds.has(p.uid || p.id));
+      setTotalStudentsCount(data.totalStudents || 0);
+      setTotalParentsCount(data.totalParents || 0);
+      setUnlinkedStudentsCount(data.unlinkedStudents || 0);
+      setUnlinkedParentsCount(data.unlinkedParents || 0);
 
-      setUnlinkedStudentsCount(unlinkedStudents.length);
-      setUnlinkedParentsCount(unlinkedParents.length);
+      if (fromCache) {
+        console.log('Loaded counts from offline cache');
+      }
     } catch (e) {
       console.error('Error fetching counts:', e);
-      // Only show network error modal for actual network errors
-      if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
+      // Try to load from cache as last resort
+      const cachedData = await getCacheData('admin_dashboard_counts');
+      if (cachedData) {
+        setTotalStudentsCount(cachedData.totalStudents || 0);
+        setTotalParentsCount(cachedData.totalParents || 0);
+        setUnlinkedStudentsCount(cachedData.unlinkedStudents || 0);
+        setUnlinkedParentsCount(cachedData.unlinkedParents || 0);
+        console.log('Loaded counts from cache after error');
       }
       // keep previous values on error
     }
@@ -248,20 +310,34 @@ const AdminDashboard = () => {
 
   const fetchAnnouncementsCount = async () => {
     try {
-      // Count total announcements from the announcements collection
-      const announcementsRef = collection(db, 'announcements');
-      const announcementsSnap = await getDocs(announcementsRef);
-      setAnnouncementsCount(announcementsSnap.size);
+      // Check network status first
+      const netState = await NetInfo.fetch();
+      const isOnline = netState.isConnected && netState.isInternetReachable;
+      
+      if (!isOnline) {
+        const cachedData = await getCacheData('admin_dashboard_announcements');
+        if (cachedData !== null) {
+          setAnnouncementsCount(cachedData);
+          console.log('Loaded announcements count from offline cache');
+          return;
+        }
+      }
+      
+      const { data, fromCache } = await fetchWithCache('admin_dashboard_announcements', async () => {
+        const announcementsRef = collection(db, 'announcements');
+        const announcementsSnap = await getDocs(announcementsRef);
+        return announcementsSnap.size;
+      });
+      setAnnouncementsCount(data);
+      if (fromCache) {
+        console.log('Loaded announcements count from offline cache');
+      }
     } catch (e) {
       console.error('Error fetching announcements count:', e);
-      // Only show network error modal for actual network errors
-      if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
+      const cachedData = await getCacheData('admin_dashboard_announcements');
+      if (cachedData !== null) {
+        setAnnouncementsCount(cachedData);
+        console.log('Loaded announcements count from cache after error');
       }
       // keep previous values
     }
@@ -269,34 +345,48 @@ const AdminDashboard = () => {
 
   const fetchStudentsQrCounts = async () => {
     try {
-      // Count from users (role=student) and compare with those present in student_QRcodes
-      const usersRef = collection(db, 'users');
-      const studentsQ = query(usersRef, where('role', '==', 'student'));
-      const [usersSnap, qrSnap] = await Promise.all([
-        getDocs(studentsQ),
-        getDocs(collection(db, 'student_QRcodes')),
-      ]);
-      const hasQrSet = new Set();
-      qrSnap.docs.forEach(d => { hasQrSet.add(String(d.id)); });
-      let withoutCount = 0;
-      usersSnap.docs.forEach(docRef => {
-        const data = docRef.data() || {};
-        const sid = String(data.studentId || docRef.id);
-        if (!hasQrSet.has(sid)) {
-          withoutCount += 1;
+      // Check network status first
+      const netState = await NetInfo.fetch();
+      const isOnline = netState.isConnected && netState.isInternetReachable;
+      
+      if (!isOnline) {
+        const cachedData = await getCacheData('admin_dashboard_qr_counts');
+        if (cachedData !== null) {
+          setStudentsWithoutQrCount(cachedData);
+          console.log('Loaded QR counts from offline cache');
+          return;
         }
+      }
+      
+      const { data, fromCache } = await fetchWithCache('admin_dashboard_qr_counts', async () => {
+        const usersRef = collection(db, 'users');
+        const studentsQ = query(usersRef, where('role', '==', 'student'));
+        const [usersSnap, qrSnap] = await Promise.all([
+          getDocs(studentsQ),
+          getDocs(collection(db, 'student_QRcodes')),
+        ]);
+        const hasQrSet = new Set();
+        qrSnap.docs.forEach(d => { hasQrSet.add(String(d.id)); });
+        let withoutCount = 0;
+        usersSnap.docs.forEach(docRef => {
+          const data = docRef.data() || {};
+          const sid = String(data.studentId || docRef.id);
+          if (!hasQrSet.has(sid)) {
+            withoutCount += 1;
+          }
+        });
+        return withoutCount;
       });
-      setStudentsWithoutQrCount(withoutCount);
+      setStudentsWithoutQrCount(data);
+      if (fromCache) {
+        console.log('Loaded QR counts from offline cache');
+      }
     } catch (e) {
       console.error('Error fetching QR counts:', e);
-      // Only show network error modal for actual network errors
-      if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
+      const cachedData = await getCacheData('admin_dashboard_qr_counts');
+      if (cachedData !== null) {
+        setStudentsWithoutQrCount(cachedData);
+        console.log('Loaded QR counts from cache after error');
       }
       // keep previous values
     }
@@ -341,6 +431,7 @@ const AdminDashboard = () => {
 
   return (<>
     <View style={styles.wrapper}>
+      <OfflineBanner visible={showOfflineBanner} />
       {/* Sidebar shown above everything using Modal to avoid tab overlap */}
       <Modal transparent visible={sidebarOpen} animationType="fade" onRequestClose={() => toggleSidebar(false)}>
         <TouchableOpacity
@@ -635,17 +726,6 @@ const AdminDashboard = () => {
         >
           <Text style={[styles.modalButtonText, styles.modalButtonDangerText]}>Logout</Text>
         </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
-    {/* Network Error Modal */}
-    <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
-      <View style={styles.modalOverlayCenter}>
-        <View style={styles.fbModalCard}>
-          <View style={styles.fbModalContent}>
-            <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
-            {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
           </View>
         </View>
       </View>

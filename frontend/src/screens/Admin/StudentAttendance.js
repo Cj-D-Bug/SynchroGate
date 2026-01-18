@@ -5,6 +5,9 @@ import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/nativ
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
 import { getNetworkErrorMessage } from '../../utils/networkErrorHandler';
+import { fetchWithCache, isNetworkError } from '../../utils/offlineCache';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 import AdminTopHeader from './AdminTopHeader';
 
 const StudentAttendance = () => {
@@ -20,10 +23,7 @@ const StudentAttendance = () => {
   const [courseList, setCourseList] = useState([]);
   const [listItems, setListItems] = useState([]);
   const [listLoading, setListLoading] = useState(false);
-  const [networkErrorVisible, setNetworkErrorVisible] = useState(false);
-  const [networkErrorTitle, setNetworkErrorTitle] = useState('');
-  const [networkErrorMessage, setNetworkErrorMessage] = useState('');
-  const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
   
   // Search state
   const [isSearching, setIsSearching] = useState(false);
@@ -43,28 +43,40 @@ const StudentAttendance = () => {
     setLoading(true);
     setError(null);
     try {
-      const usersRef = collection(db, 'users');
-      const q = query(usersRef, where('role', '==', 'student'));
-      const snap = await getDocs(q);
-      const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setStudents(items);
+      const { data, fromCache } = await fetchWithCache('admin_student_attendance_students', async () => {
+        const usersRef = collection(db, 'users');
+        const q = query(usersRef, where('role', '==', 'student'));
+        const snap = await getDocs(q);
+        return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      });
+      setStudents(data);
+      if (fromCache) {
+        console.log('Loaded students from offline cache');
+      }
     } catch (e) {
       console.error('Error loading students:', e);
-      if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      } else {
-        setError('Failed to load students');
-        setStudents([]);
-      }
+      setError('Failed to load students');
+      setStudents([]);
     } finally {
       setLoading(false);
     }
   };
+
+  // Monitor network connectivity
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const isConnected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!isConnected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const isConnected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!isConnected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     loadAllStudents();
@@ -251,14 +263,6 @@ const StudentAttendance = () => {
       setListItems(yearStudents);
     } catch (e) {
       console.error('Error fetching students for year:', e);
-      if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      }
       setListItems([]);
     } finally {
       setListLoading(false);
@@ -292,14 +296,6 @@ const StudentAttendance = () => {
       setListItems(courseStudents);
     } catch (e) {
       console.error('Error fetching students for course:', e);
-      if (e?.code?.includes('unavailable') || e?.code?.includes('network') || e?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: e.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      }
       setListItems([]);
     } finally {
       setListLoading(false);
@@ -337,6 +333,7 @@ const StudentAttendance = () => {
   return (
     <View style={styles.wrapper}>
       <AdminTopHeader />
+      <OfflineBanner visible={showOfflineBanner} />
       <KeyboardAvoidingView 
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -648,18 +645,6 @@ const StudentAttendance = () => {
           </ScrollView>
         </View>
       </KeyboardAvoidingView>
-
-      {/* Network Error Modal */}
-      <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
-        <View style={styles.modalOverlayCenter}>
-          <View style={styles.fbModalCard}>
-            <View style={styles.fbModalContent}>
-              <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
-              {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
-            </View>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 };

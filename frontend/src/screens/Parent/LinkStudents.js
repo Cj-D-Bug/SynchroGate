@@ -32,8 +32,11 @@ import {
 } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
 import { deleteConversationOnUnlink, deleteAllStudentToStudentConversations } from '../../utils/conversationUtils';
-import { getNetworkErrorMessage } from '../../utils/networkErrorHandler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { NetworkContext } from '../../contexts/NetworkContext';
+import { getCachedLinkedStudents, cacheLinkedStudents } from '../../offline/storage';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 // Removed: sendAlertPushNotification import - backend handles all push notifications automatically
 
 const { width, height } = Dimensions.get('window');
@@ -84,10 +87,7 @@ function LinkStudents() {
   const [cancelRequestTarget, setCancelRequestTarget] = useState(null);
   const [cancelingRequest, setCancelingRequest] = useState(false);
   const [headerSearchShowing, setHeaderSearchShowing] = useState(false);
-  const [networkErrorVisible, setNetworkErrorVisible] = useState(false);
-  const [networkErrorTitle, setNetworkErrorTitle] = useState('');
-  const [networkErrorMessage, setNetworkErrorMessage] = useState('');
-  const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
   const [refreshCounter, setRefreshCounter] = useState(0);
   
   // Force re-render when link-related state changes
@@ -130,6 +130,25 @@ function LinkStudents() {
     }, [navigation])
   );
 
+  const networkContext = useContext(NetworkContext);
+  const isConnected = networkContext?.isConnected ?? true;
+
+  // Network monitoring
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!connected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setShowOfflineBanner(!connected);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   // Load profile picture (parent)
   useEffect(() => {
     const loadProfilePic = async () => {
@@ -157,11 +176,49 @@ function LinkStudents() {
   const loadLinkedStudents = async () => {
     if (!user?.uid) { setLoadingLinked(false); setLinkedStudents([]); setRequestedStudents([]); return; }
     if (isLoadingStudents) return;
-    try {
-      setIsLoadingStudents(true);
-      setLoadingLinked(true);
-      setLoadError(null);
-      const canonicalId = await getCanonicalParentDocId();
+    
+      // Always try to load cached data first (for immediate display)
+      let cachedLoaded = false;
+      try {
+        const cachedLinkedStudents = await getCachedLinkedStudents(user.uid);
+        if (cachedLinkedStudents && Array.isArray(cachedLinkedStudents) && cachedLinkedStudents.length > 0) {
+          const formatted = cachedLinkedStudents.map(s => ({
+            linkId: s.linkId || '',
+            id: s.studentId || s.id,
+            firstName: s.studentName || s.firstName || '',
+            lastName: '',
+            studentId: s.studentIdNumber || s.studentId || '',
+            relationship: s.relationship || '',
+            linkedAt: s.linkedAt || new Date().toISOString()
+          }));
+          setLinkedStudents(formatted);
+          console.log('✅ Linked students loaded from cache');
+          cachedLoaded = true;
+          // If offline, use cached data and return early
+          if (!isConnected) {
+            setLoadingLinked(false);
+            return;
+          }
+        }
+      } catch (error) {
+        console.log('Error loading cached linked students:', error);
+      }
+      
+      // Only fetch from Firestore if online
+      if (!isConnected) {
+        if (!cachedLoaded) {
+          setLoadingLinked(false);
+        }
+        return;
+      }
+      
+      try {
+        setIsLoadingStudents(true);
+        if (!cachedLoaded) {
+          setLoadingLinked(true);
+        }
+        setLoadError(null);
+        const canonicalId = await getCanonicalParentDocId();
       const q1 = query(collection(db, 'parent_student_links'), where('parentId', '==', user.uid), where('status', '==', 'active'));
       const q2 = canonicalId && canonicalId.includes('-')
         ? query(collection(db, 'parent_student_links'), where('parentIdNumber', '==', canonicalId), where('status', '==', 'active'))
@@ -195,19 +252,23 @@ function LinkStudents() {
       }
       setLinkedStudents(students);
       setRequestedStudents(requests);
+      
+      // Cache linked students for offline access
+      try {
+        const studentsForCache = students.map(s => ({
+          studentId: s.id,
+          studentIdNumber: s.studentId,
+          studentName: s.firstName,
+          relationship: s.relationship,
+          linkedAt: s.linkedAt
+        }));
+        await cacheLinkedStudents(user.uid, studentsForCache);
+      } catch (error) {
+        console.log('Error caching linked students:', error);
+      }
     } catch (error) {
       console.error('Error loading linked students:', error);
-      // Only show network error modal for actual network errors
-      if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      } else {
-        setLoadError(error.message || 'Failed to load linked students');
-      }
+      setLoadError(error.message || 'Failed to load linked students');
       setLinkedStudents([]);
       setRequestedStudents([]);
     } finally {
@@ -245,19 +306,25 @@ function LinkStudents() {
               const map = new Map((prev || []).map(s => [s.id, s]));
               items1.forEach(s => map.set(s.id, s));
               const newList = Array.from(map.values());
+              // Cache linked students for offline access
+              try {
+                const studentsForCache = newList.map(s => ({
+                  studentId: s.id,
+                  studentIdNumber: s.studentId,
+                  studentName: s.firstName,
+                  relationship: s.relationship,
+                  linkedAt: s.linkedAt
+                }));
+                cacheLinkedStudents(user.uid, studentsForCache);
+              } catch (error) {
+                console.log('Error caching linked students in listener:', error);
+              }
               // State update will trigger re-render automatically
               return newList;
             });
           },
           (error) => {
-            const errorInfo = getNetworkErrorMessage(error);
-            if (error?.code?.includes('unavailable') || error?.code?.includes('deadline-exceeded') || error?.message?.toLowerCase().includes('network') || error?.message?.toLowerCase().includes('connection')) {
-              setNetworkErrorTitle(errorInfo.title);
-              setNetworkErrorMessage(errorInfo.message);
-              setNetworkErrorColor(errorInfo.color);
-              setNetworkErrorVisible(true);
-              setTimeout(() => setNetworkErrorVisible(false), 5000);
-            }
+            console.error('Error in onSnapshot listener:', error);
           }
         );
         if (canonicalId && canonicalId.includes('-')) {
@@ -270,6 +337,19 @@ function LinkStudents() {
                 const map = new Map((prev || []).map(s => [s.id, s]));
                 items2.forEach(s => map.set(s.id, s));
                 const newList = Array.from(map.values());
+                // Cache linked students for offline access
+                try {
+                  const studentsForCache = newList.map(s => ({
+                    studentId: s.id,
+                    studentIdNumber: s.studentId,
+                    studentName: s.firstName,
+                    relationship: s.relationship,
+                    linkedAt: s.linkedAt
+                  }));
+                  cacheLinkedStudents(user.uid, studentsForCache);
+                } catch (error) {
+                  console.log('Error caching linked students in listener:', error);
+                }
                 // State update will trigger re-render automatically
                 return newList;
               });
@@ -435,15 +515,6 @@ function LinkStudents() {
           setAllStudents(students);
         } catch (error) {
           console.error('Error loading all students:', error);
-          // Only show network error modal for actual network errors
-          if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-            const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-            setNetworkErrorTitle(errorInfo.title);
-            setNetworkErrorMessage(errorInfo.message);
-            setNetworkErrorColor(errorInfo.color);
-            setNetworkErrorVisible(true);
-            setTimeout(() => setNetworkErrorVisible(false), 5000);
-          }
           setAllStudents([]);
         }
       })();
@@ -600,15 +671,6 @@ function LinkStudents() {
         }
       } catch (error) {
         console.error('Error opening student info:', error);
-        // Only show network error modal for actual network errors
-        if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-          const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-          setNetworkErrorTitle(errorInfo.title);
-          setNetworkErrorMessage(errorInfo.message);
-          setNetworkErrorColor(errorInfo.color);
-          setNetworkErrorVisible(true);
-          setTimeout(() => setNetworkErrorVisible(false), 5000);
-        }
       } finally {
         setStudentInfoLoading(false);
       }
@@ -825,15 +887,6 @@ function LinkStudents() {
       }, 3000);
     } catch (error) {
       console.error('Error sending link request:', error);
-      // Only show network error modal for actual network errors
-      if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      } else {
         setFeedbackSuccess(false);
         setFeedbackTitle('Error');
         setFeedbackMessage(error.message || 'Failed to send request.');
@@ -844,7 +897,7 @@ function LinkStudents() {
           resetToNormalState();
         }, 3000);
       }
-    } finally {
+    finally {
       setLinkingStudent(false);
     }
   };
@@ -1186,15 +1239,6 @@ function LinkStudents() {
       }, 3000);
     } catch (error) {
       console.error('Error unlinking student:', error);
-      // Only show network error modal for actual network errors
-      if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-        const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-        setNetworkErrorTitle(errorInfo.title);
-        setNetworkErrorMessage(errorInfo.message);
-        setNetworkErrorColor(errorInfo.color);
-        setNetworkErrorVisible(true);
-        setTimeout(() => setNetworkErrorVisible(false), 5000);
-      } else {
         setFeedbackSuccess(false);
         setFeedbackTitle('Error');
       setFeedbackMessage(`Failed to unlink student: ${error.message}`);
@@ -1208,7 +1252,7 @@ function LinkStudents() {
         resetToNormalState();
       }, 3000);
       }
-    } finally {
+    finally {
       setUnlinking(false);
     }
   };
@@ -1920,19 +1964,9 @@ function LinkStudents() {
           </View>
         </Modal>
 
-        {/* Network Error Modal */}
-        <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
-          <View style={styles.modalOverlayCenter}>
-            <View style={styles.fbModalCard}>
-              <View style={styles.fbModalContent}>
-                <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
-                {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
-              </View>
-            </View>
-          </View>
-        </Modal>
-
       </View>
+      
+      <OfflineBanner visible={showOfflineBanner} />
     </>
   );
 }

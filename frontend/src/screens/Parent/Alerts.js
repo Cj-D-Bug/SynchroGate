@@ -36,6 +36,8 @@ import { cacheAlerts, getCachedAlerts } from '../../offline/storage';
 // Removed: sendAlertPushNotification import - backend handles all push notifications automatically
 import { updateLinkFcmTokens, getLinkFcmTokens } from '../../utils/linkFcmTokenManager';
 import { generateAndSavePushToken } from '../../utils/pushTokenGenerator';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 const AboutLogo = require('../../assets/logo.png');
 
 const { width, height } = Dimensions.get('window');
@@ -63,6 +65,8 @@ const Alerts = () => {
   const [markingAsRead, setMarkingAsRead] = useState(false);
   const [scheduleModalVisible, setScheduleModalVisible] = useState(false);
   const [scheduleDetail, setScheduleDetail] = useState(null);
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
   const [isDeleting, setIsDeleting] = useState(false);
   
   
@@ -431,6 +435,24 @@ const Alerts = () => {
     
     return () => clearInterval(cleanupInterval);
   }, [user?.uid]);
+
+  // Network monitoring
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // Persist filter per parent account
   useEffect(() => {
@@ -993,6 +1015,79 @@ const Alerts = () => {
         await setDoc(parentAlertsRef, { items: updated }, { merge: true });
       }
 
+      // Remove pending requests with same requestId from all other linked parents
+      try {
+        // Get all parent_student_links for this student
+        const linkQueries = [];
+        if (alert.studentId) {
+          // Try to find student UID from studentId
+          const studentIdQueries = [
+            query(collection(db, 'parent_student_links'), where('studentIdNumber', '==', alert.studentId), where('status', '==', 'active')),
+          ];
+          // Also query by studentId as UID if it looks like a UID
+          if (alert.studentId && !alert.studentId.includes('-')) {
+            studentIdQueries.push(
+              query(collection(db, 'parent_student_links'), where('studentId', '==', alert.studentId), where('status', '==', 'active'))
+            );
+          }
+          const linkResults = await Promise.all(studentIdQueries.map(q => getDocs(q)));
+          const allLinks = [];
+          linkResults.forEach(snap => {
+            snap.docs.forEach(doc => {
+              const data = doc.data();
+              allLinks.push({
+                parentId: data.parentId,
+                linkId: doc.id
+              });
+            });
+          });
+
+          // For each linked parent (excluding the current parent), remove pending requests with same requestId
+          const resolveParentDocId = async (parentUid) => {
+            try {
+              const raw = String(parentUid || '').trim();
+              if (raw && raw.includes('-')) return raw;
+              try {
+                const qSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', raw), where('role', '==', 'parent')));
+                if (!qSnap.empty) {
+                  const data = qSnap.docs[0].data() || {};
+                  const cand = String(data.parentId || data.parentIdCanonical || '').trim();
+                  if (cand && cand.includes('-')) return cand;
+                }
+              } catch {}
+              return raw;
+            } catch {
+              return String(parentUid || '').trim();
+            }
+          };
+
+          const currentParentDocId = await getParentDocId();
+          for (const link of allLinks) {
+            const otherParentDocId = await resolveParentDocId(link.parentId);
+            // Skip current parent - we already updated their alerts above
+            if (otherParentDocId === currentParentDocId) continue;
+            
+            const otherParentAlertsRef = doc(db, 'parent_alerts', otherParentDocId);
+            const otherParentSnap = await getDoc(otherParentAlertsRef);
+            if (otherParentSnap.exists()) {
+              const existing = Array.isArray(otherParentSnap.data()?.items) ? otherParentSnap.data().items : [];
+              // Remove any pending schedule_permission_request with the same requestId
+              const updated = existing.filter(it => 
+                !(it?.type === 'schedule_permission_request' && 
+                  it?.requestId === alert.requestId &&
+                  it?.status === 'unread')
+              );
+              if (updated.length !== existing.length) {
+                await setDoc(otherParentAlertsRef, { items: updated }, { merge: true });
+                console.log(`✅ Removed pending request from parent ${otherParentDocId} (requestId: ${alert.requestId})`);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('Error removing pending requests from other parents (non-critical):', error);
+      }
+
       // Update local state
       setAlerts(prev => prev.map(a => (
         a.alertType === 'schedule_permission_request' && a.requestId === alert.requestId
@@ -1070,6 +1165,79 @@ const Alerts = () => {
           return it;
         });
         await setDoc(parentAlertsRef, { items: updated }, { merge: true });
+      }
+
+      // Remove pending requests with same requestId from all other linked parents
+      try {
+        // Get all parent_student_links for this student
+        const linkQueries = [];
+        if (alert.studentId) {
+          // Try to find student UID from studentId
+          const studentIdQueries = [
+            query(collection(db, 'parent_student_links'), where('studentIdNumber', '==', alert.studentId), where('status', '==', 'active')),
+          ];
+          // Also query by studentId as UID if it looks like a UID
+          if (alert.studentId && !alert.studentId.includes('-')) {
+            studentIdQueries.push(
+              query(collection(db, 'parent_student_links'), where('studentId', '==', alert.studentId), where('status', '==', 'active'))
+            );
+          }
+          const linkResults = await Promise.all(studentIdQueries.map(q => getDocs(q)));
+          const allLinks = [];
+          linkResults.forEach(snap => {
+            snap.docs.forEach(doc => {
+              const data = doc.data();
+              allLinks.push({
+                parentId: data.parentId,
+                linkId: doc.id
+              });
+            });
+          });
+
+          // For each linked parent (excluding the current parent), remove pending requests with same requestId
+          const resolveParentDocId = async (parentUid) => {
+            try {
+              const raw = String(parentUid || '').trim();
+              if (raw && raw.includes('-')) return raw;
+              try {
+                const qSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', raw), where('role', '==', 'parent')));
+                if (!qSnap.empty) {
+                  const data = qSnap.docs[0].data() || {};
+                  const cand = String(data.parentId || data.parentIdCanonical || '').trim();
+                  if (cand && cand.includes('-')) return cand;
+                }
+              } catch {}
+              return raw;
+            } catch {
+              return String(parentUid || '').trim();
+            }
+          };
+
+          const currentParentDocId = await getParentDocId();
+          for (const link of allLinks) {
+            const otherParentDocId = await resolveParentDocId(link.parentId);
+            // Skip current parent - we already updated their alerts above
+            if (otherParentDocId === currentParentDocId) continue;
+            
+            const otherParentAlertsRef = doc(db, 'parent_alerts', otherParentDocId);
+            const otherParentSnap = await getDoc(otherParentAlertsRef);
+            if (otherParentSnap.exists()) {
+              const existing = Array.isArray(otherParentSnap.data()?.items) ? otherParentSnap.data().items : [];
+              // Remove any pending schedule_permission_request with the same requestId
+              const updated = existing.filter(it => 
+                !(it?.type === 'schedule_permission_request' && 
+                  it?.requestId === alert.requestId &&
+                  it?.status === 'unread')
+              );
+              if (updated.length !== existing.length) {
+                await setDoc(otherParentAlertsRef, { items: updated }, { merge: true });
+                console.log(`✅ Removed pending request from parent ${otherParentDocId} (requestId: ${alert.requestId})`);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('Error removing pending requests from other parents (non-critical):', error);
       }
 
       // Update local state
@@ -1927,6 +2095,7 @@ const Alerts = () => {
       </View>
     </Modal>
 
+    <OfflineBanner visible={showOfflineBanner} />
   </>);
 };
 

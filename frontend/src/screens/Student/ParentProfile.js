@@ -13,9 +13,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import { doc, getDoc, query, collection, where, getDocs, onSnapshot, deleteDoc, updateDoc, setDoc, arrayUnion } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
-import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
 import { AuthContext } from '../../contexts/AuthContext';
 import { NetworkContext } from '../../contexts/NetworkContext';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 import { deleteConversationOnUnlink, deleteAllStudentToStudentConversations } from '../../utils/conversationUtils';
 
 const ParentProfile = () => {
@@ -38,10 +39,8 @@ const ParentProfile = () => {
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [feedbackSuccess, setFeedbackSuccess] = useState(true);
   const [feedbackTitle, setFeedbackTitle] = useState('');
-  const [networkErrorVisible, setNetworkErrorVisible] = useState(false);
-  const [networkErrorTitle, setNetworkErrorTitle] = useState('');
-  const [networkErrorMessage, setNetworkErrorMessage] = useState('');
-  const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
   const fetchedParentIdRef = useRef(null);
 
   // Hide tab bar when focused - absolutely ensure it's hidden
@@ -94,6 +93,24 @@ const ParentProfile = () => {
     const timeoutId = setTimeout(hideTabBar, 0);
     return () => clearTimeout(timeoutId);
   }, [navigation]);
+
+  // Network monitoring
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // Resolve canonical student doc id for student_alerts (prefer formatted studentId)
   const getCanonicalStudentDocId = async () => {
@@ -241,15 +258,6 @@ const ParentProfile = () => {
         }
       } catch (error) {
         console.log('Error fetching parent data:', error);
-        // Only show network error modal for actual network errors
-        if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-          const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-          setNetworkErrorTitle(errorInfo.title);
-          setNetworkErrorMessage(errorInfo.message);
-          setNetworkErrorColor(errorInfo.color);
-          setNetworkErrorVisible(true);
-          setTimeout(() => setNetworkErrorVisible(false), 5000);
-        }
         // Keep existing state on error
       }
     };
@@ -343,15 +351,6 @@ const ParentProfile = () => {
         }
       } catch (error) {
         console.error("Error checking linked status:", error);
-        // Only show network error modal for actual network errors
-        if (error?.code?.includes('unavailable') || error?.code?.includes('network') || error?.message?.toLowerCase().includes('network')) {
-          const errorInfo = getNetworkErrorMessage({ type: 'unstable_connection', message: error.message });
-          setNetworkErrorTitle(errorInfo.title);
-          setNetworkErrorMessage(errorInfo.message);
-          setNetworkErrorColor(errorInfo.color);
-          setNetworkErrorVisible(true);
-          setTimeout(() => setNetworkErrorVisible(false), 5000);
-        }
         setIsLinked(false);
         setLinkedStudents([]);
       }
@@ -772,18 +771,6 @@ const ParentProfile = () => {
         </View>
       </Modal>
 
-      {/* Network Error Modal */}
-      <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
-        <View style={styles.modalOverlayCenter}>
-          <View style={styles.fbModalCard}>
-            <View style={styles.fbModalContent}>
-              <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
-              {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
-            </View>
-          </View>
-        </View>
-      </Modal>
-
       {/* Bottom Action Button - Unlink */}
       <TouchableOpacity
         style={styles.unlinkButtonContainer}
@@ -796,6 +783,8 @@ const ParentProfile = () => {
           <Text style={styles.unlinkButtonText}>Unlink</Text>
         </View>
       </TouchableOpacity>
+      
+      <OfflineBanner visible={showOfflineBanner} />
     </View>
   );
 };
@@ -1028,4 +1017,3 @@ const styles = StyleSheet.create({
 });
 
 export default ParentProfile;
-

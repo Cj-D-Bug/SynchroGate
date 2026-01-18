@@ -17,6 +17,7 @@ import { doc, updateDoc, getDoc, query, collection, where, getDocs, onSnapshot, 
 import { db } from '../../utils/firebaseConfig';
 import { deleteAllUserConversations } from '../../utils/conversationUtils';
 import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
+import NetInfo from '@react-native-community/netinfo';
 import AdminTopHeader from './AdminTopHeader';
 
 const ParentProfile = () => {
@@ -384,6 +385,20 @@ const ParentProfile = () => {
   const handleSave = async () => {
     if (!currentParent?.id) {
       Alert.alert('Error', 'Parent ID not found');
+      return;
+    }
+
+    // Check if offline
+    const netState = await NetInfo.fetch();
+    if (!netState.isConnected || !netState.isInternetReachable) {
+      setConfirmVisible(false);
+      setFeedbackTitle('No internet Connection');
+      setFeedbackMessage('Cannot save changes while offline. Please check your internet connection.');
+      setFeedbackTextColor('#8B0000');
+      setFeedbackVisible(true);
+      setTimeout(() => {
+        setFeedbackVisible(false);
+      }, 3000);
       return;
     }
 
@@ -1187,7 +1202,21 @@ const ParentProfile = () => {
                   { backgroundColor: '#8B0000' },
                   deletingAccount && styles.fbModalButtonDisabled
                 ]} 
-                onPress={async () => { 
+                onPress={async () => {
+                  // Check if offline
+                  const netState = await NetInfo.fetch();
+                  if (!netState.isConnected || !netState.isInternetReachable) {
+                    setDeleteConfirmVisible(false);
+                    setFeedbackTitle('No internet Connection');
+                    setFeedbackMessage('Cannot delete parent account while offline. Please check your internet connection.');
+                    setFeedbackTextColor('#8B0000');
+                    setFeedbackVisible(true);
+                    setTimeout(() => {
+                      setFeedbackVisible(false);
+                    }, 3000);
+                    return;
+                  }
+
                   if (!deletingAccount) {
                     await deleteParentAccount();
                   }
@@ -1637,4 +1666,3 @@ const styles = StyleSheet.create({
 });
 
 export default ParentProfile;
-

@@ -5,8 +5,9 @@ import { AuthContext } from '../../contexts/AuthContext';
 import { NetworkContext } from '../../contexts/NetworkContext';
 import { doc, getDoc, collection, query, orderBy, limit, onSnapshot, deleteDoc, getDocs, where, setDoc } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
-import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/networkErrorHandler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 import QRCodeDisplay from '../../components/QRCodeDisplay';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import * as ScreenCapture from 'expo-screen-capture';
@@ -36,10 +37,10 @@ const QRPreview = () => {
   const [recentScan, setRecentScan] = useState(null); // { scanId, timestamp, direction }
   const [timeRemaining, setTimeRemaining] = useState(0); // seconds remaining
   const [undoing, setUndoing] = useState(false);
-  const [networkErrorVisible, setNetworkErrorVisible] = useState(false);
-  const [networkErrorTitle, setNetworkErrorTitle] = useState('');
-  const [networkErrorMessage, setNetworkErrorMessage] = useState('');
-  const [networkErrorColor, setNetworkErrorColor] = useState('#DC2626');
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
+  const [errorModalVisible, setErrorModalVisible] = useState(false);
+  const [errorModalMessage, setErrorModalMessage] = useState('');
   const timerRef = useRef(null);
   const scanListenerRef = useRef(null);
 
@@ -233,9 +234,30 @@ const QRPreview = () => {
     };
   }, [recentScan, timeRemaining]);
 
+  // Monitor network connectivity for offline banner
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      setShowOfflineBanner(!state.isConnected);
+      setIsOnline(state.isConnected);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const showErrorModal = (message) => {
+    setErrorModalMessage(message);
+    setErrorModalVisible(true);
+    setTimeout(() => setErrorModalVisible(false), 3000);
+  };
+
   // Undo entry function
   const undoEntry = async () => {
     if (!recentScan || !user?.studentId) return;
+
+    // Check internet connection before proceeding
+    if (!isConnected) {
+      showErrorModal('No internet connection. Please check your network and try again.');
+      return;
+    }
 
     try {
       setUndoing(true);
@@ -435,17 +457,19 @@ const QRPreview = () => {
       </View>
     </View>
 
-      {/* Network Error Modal */}
-      <Modal transparent animationType="fade" visible={networkErrorVisible} onRequestClose={() => setNetworkErrorVisible(false)}>
+      {/* Error Feedback Modal */}
+      <Modal transparent animationType="fade" visible={errorModalVisible} onRequestClose={() => setErrorModalVisible(false)}>
         <View style={styles.modalOverlayCenter}>
           <View style={styles.fbModalCard}>
             <View style={styles.fbModalContent}>
-              <Text style={[styles.fbModalTitle, { color: networkErrorColor }]}>{networkErrorTitle}</Text>
-              {networkErrorMessage ? <Text style={styles.fbModalMessage}>{networkErrorMessage}</Text> : null}
+              <Text style={[styles.fbModalTitle, { color: '#8B0000' }]}>No internet Connection</Text>
+              <Text style={styles.fbModalMessage}>{errorModalMessage}</Text>
             </View>
           </View>
         </View>
       </Modal>
+
+      <OfflineBanner visible={showOfflineBanner} />
     </>
   );
 };
@@ -614,5 +638,4 @@ const styles = StyleSheet.create({
 });
 
 export default QRPreview;
-
 

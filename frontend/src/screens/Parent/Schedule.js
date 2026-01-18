@@ -7,7 +7,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { doc, getDoc, collection, query, where, getDocs, setDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../../utils/firebaseConfig';
 import { NetworkContext } from '../../contexts/NetworkContext';
-import { cacheSchedule, getCachedSchedule } from '../../offline/storage';
+import { cacheSchedule, getCachedSchedule, getCachedLinkedStudents, cacheLinkedStudents } from '../../offline/storage';
+import OfflineBanner from '../../components/OfflineBanner';
+import NetInfo from '@react-native-community/netinfo';
 
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const UNIVERSAL_HEADER_COLOR = '#004F89';
@@ -40,6 +42,8 @@ const ParentSchedule = () => {
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [feedbackSuccess, setFeedbackSuccess] = useState(true);
   const [isProcessingPermission, setIsProcessingPermission] = useState(false);
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
 
   useEffect(() => {
     const loadProfile = async () => {
@@ -68,6 +72,24 @@ const ParentSchedule = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // Network monitoring
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    // Check initial network state
+    NetInfo.fetch().then(state => {
+      const connected = state.isConnected && state.isInternetReachable;
+      setIsOnline(connected);
+      setShowOfflineBanner(!connected);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   // Load linked children using broader matching and merge duplicates
   useEffect(() => {
     const fetchChildren = async () => {
@@ -77,9 +99,35 @@ const ParentSchedule = () => {
         return; 
       }
       
+      // Try to load cached linked students first (for immediate display)
+      try {
+        const cachedLinkedStudents = await getCachedLinkedStudents(user.uid);
+        if (cachedLinkedStudents && Array.isArray(cachedLinkedStudents) && cachedLinkedStudents.length > 0) {
+          const formatted = cachedLinkedStudents.map(s => ({
+            id: s.studentId || s.id,
+            studentId: s.studentIdNumber || s.studentId || '',
+            firstName: s.studentName || s.firstName || '',
+            lastName: '',
+            relationship: s.relationship || '',
+          }));
+          setChildren(formatted);
+          if (formatted.length && !selectedChildId) setSelectedChildId(formatted[0].id);
+          console.log('✅ Linked children loaded from cache');
+          setLoadingChildren(false);
+          // If offline, use cached data and return early
+          if (!isConnected) {
+            return;
+          }
+        }
+      } catch (error) {
+        console.log('Error loading cached linked children:', error);
+      }
+      
       // Only fetch from Firestore if online
       if (!isConnected) {
-        setLoadingChildren(false);
+        if (!children.length) {
+          setLoadingChildren(false);
+        }
         return;
       }
       
@@ -123,6 +171,20 @@ const ParentSchedule = () => {
         console.log('Collected children (unique, active):', list.length);
         setChildren(list);
         if (list.length && !selectedChildId) setSelectedChildId(list[0].id);
+        
+        // Cache linked children for offline access
+        try {
+          const childrenForCache = list.map(c => ({
+            studentId: c.id,
+            studentIdNumber: c.studentId,
+            studentName: c.firstName,
+            relationship: c.relationship,
+            linkedAt: new Date().toISOString()
+          }));
+          await cacheLinkedStudents(user.uid, childrenForCache);
+        } catch (error) {
+          console.log('Error caching linked children:', error);
+        }
       } catch (error) {
         console.error('Error loading children:', error);
         setChildren([]);
@@ -320,17 +382,18 @@ const ParentSchedule = () => {
       const studentUid = selectedChild.id;
       const cacheKey = studentIdNumber || studentUid;
       
-      // Try to load from cache first (works offline)
+      // Always try to load from cache first (for immediate display)
       if (cacheKey) {
         try {
           const cachedData = await getCachedSchedule(cacheKey);
           if (cachedData) {
             setSchedule(cachedData.schedule || []);
             setStudentName(cachedData.studentName || selectedChild.firstName || '');
+            console.log('✅ Schedule loaded from cache');
+            setLoadingSchedule(false);
             // If offline, use cached data and return early
             if (!isConnected) {
               console.log('📴 Offline mode - using cached schedule');
-              setLoadingSchedule(false);
               return;
             }
           }
@@ -341,7 +404,9 @@ const ParentSchedule = () => {
       
       // Only fetch from Firestore if online
       if (!isConnected) {
-        setLoadingSchedule(false);
+        if (!schedule.length) {
+          setLoadingSchedule(false);
+        }
         return;
       }
       
@@ -1011,6 +1076,8 @@ const ParentSchedule = () => {
           />
         </TouchableOpacity>
       )}
+      
+      <OfflineBanner visible={showOfflineBanner} />
     </View>
   );
 };
