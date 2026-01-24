@@ -22,7 +22,8 @@
       "bundleIdentifier": "com.palabay.synchrogate",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
-      }
+      },
+      "googleServicesFile": "./GoogleService-Info.plist"
     },
     "android": {
       "statusBar": {
@@ -39,8 +40,7 @@
         "INTERNET",
         "POST_NOTIFICATIONS",
         "RECEIVE_BOOT_COMPLETED",
-        "VIBRATE",
-        "WAKE_LOCK"
+        "VIBRATE"
       ],
       "package": "com.palabay.synchrogate",
       "googleServicesFile": "./google-services.json"
@@ -49,28 +49,32 @@
       "favicon": "./src/assets/SG.png"
     },
     "plugins": [
-      "expo-notifications",
+      "@react-native-firebase/app",
+      "@react-native-firebase/messaging",
       "expo-font",
-      "expo-dev-client",
+      [
+        "expo-notifications",
+        {
+          "icon": "./src/assets/SG.png",
+          "color": "#ffffff"
+        }
+      ],
       [
         "expo-build-properties",
         {
           "android": {
-            "googleServicesFile": "./google-services.json"
-          },
-          "ios": {
-            "googleServicesFile": "./GoogleService-Info.plist"
+            "usesCleartextTraffic": true
           }
         }
-      ]
+      ],
+      "./plugins/withFixManifestMerger"
     ],
     "extra": {
       "env": "production",
-      "apiBaseUrl": "https://synchrogate-production.up.railway.app/api",
       "eas": {
-        "projectId": "504ea9ab-b25a-46a0-b7b5-67235d0d11f3"
+        "projectId": "2539a094-86a2-4b3c-b1b3-998dbf413c58"
       }
     },
-    "owner": "awds"
+    "owner": "chisanaosama2004"
   }
 }

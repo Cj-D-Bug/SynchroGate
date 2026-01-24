@@ -10,7 +10,7 @@ import { fetchWithCache, isNetworkError } from '../../utils/offlineCache';
 import OfflineBanner from '../../components/OfflineBanner';
 import NetInfo from '@react-native-community/netinfo';
 import AdminTopHeader from './AdminTopHeader';
-const AboutLogo = require('../../assets/logo.png');
+const AboutLogo = require('../../assets/SG.png');
 
 const StudentManagement = () => {
   const navigation = useNavigation();

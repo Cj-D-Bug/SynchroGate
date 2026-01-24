@@ -11,7 +11,7 @@ import { fetchWithCache, isNetworkError } from '../../utils/offlineCache';
 import OfflineBanner from '../../components/OfflineBanner';
 import NetInfo from '@react-native-community/netinfo';
 import * as Notifications from 'expo-notifications';
-const AboutLogo = require('../../assets/logo.png');
+const AboutLogo = require('../../assets/SG.png');
 
 const { width } = Dimensions.get('window');
 

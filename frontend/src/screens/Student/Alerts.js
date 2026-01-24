@@ -38,7 +38,7 @@ import { generateAndSavePushToken } from '../../utils/pushTokenGenerator';
 // Removed: sendAlertPushNotification import - backend handles all push notifications automatically
 import OfflineBanner from '../../components/OfflineBanner';
 import NetInfo from '@react-native-community/netinfo';
-const AboutLogo = require('../../assets/logo.png');
+const AboutLogo = require('../../assets/SG.png');
 
 const { width, height } = Dimensions.get('window');
 const DARK_RED = '#8B0000';

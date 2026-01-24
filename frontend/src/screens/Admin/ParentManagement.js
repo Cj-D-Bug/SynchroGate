@@ -8,7 +8,7 @@ import { withNetworkErrorHandling, getNetworkErrorMessage } from '../../utils/ne
 import OfflineBanner from '../../components/OfflineBanner';
 import NetInfo from '@react-native-community/netinfo';
 import AdminTopHeader from './AdminTopHeader';
-const AboutLogo = require('../../assets/logo.png');
+const AboutLogo = require('../../assets/SG.png');
 
 const ParentManagement = () => {
   const navigation = useNavigation();

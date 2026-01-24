@@ -17,7 +17,7 @@ import { AuthContext } from '../../contexts/AuthContext';
 import OfflineBanner from '../../components/OfflineBanner';
 import NetInfo from '@react-native-community/netinfo';
 
-const AboutLogo = require('../../assets/logo.png');
+const AboutLogo = require('../../assets/SG.png');
 
 const { width } = Dimensions.get('window');
 

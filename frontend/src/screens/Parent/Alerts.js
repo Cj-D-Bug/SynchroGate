@@ -38,7 +38,7 @@ import { updateLinkFcmTokens, getLinkFcmTokens } from '../../utils/linkFcmTokenM
 import { generateAndSavePushToken } from '../../utils/pushTokenGenerator';
 import OfflineBanner from '../../components/OfflineBanner';
 import NetInfo from '@react-native-community/netinfo';
-const AboutLogo = require('../../assets/logo.png');
+const AboutLogo = require('../../assets/SG.png');
 
 const { width, height } = Dimensions.get('window');
 const DARK_RED = '#8B0000';

@@ -40,6 +40,8 @@ ECHO is on.
 *.jks
 google-services.json
 GoogleService-Info.plist
+# Exception: Allow google-services.json in frontend for EAS builds
+!frontend/google-services.json
 ECHO is on.
 # Firebase local emulators
 firebase-debug.log
