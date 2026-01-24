@@ -321,7 +321,7 @@ const AttendanceLog = () => {
       attendanceQuery,
       snapshot => {
         console.log('📊 PARENT ATTENDANCE: Snapshot received, size:', snapshot.size);
-        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
         if (data.length > 0) {
           console.log('📊 PARENT ATTENDANCE: First log entry:', { id: data[0].id, entry: data[0].entry, timeOfScanned: data[0].timeOfScanned });
         }
@@ -727,7 +727,7 @@ const AttendanceLog = () => {
             logs.length > 0 ? (
               <View style={styles.logsListContent}>
                 {logs.map((item, index) => (
-                  <View key={item.id || index.toString()}>
+                  <View key={`${item.id}_${index}`}>
                     {renderLogItem({ item, index })}
                   </View>
                 ))}
@@ -753,7 +753,7 @@ const AttendanceLog = () => {
             todayLogs.length > 0 ? (
               <View style={styles.logsListContent}>
                 {todayLogs.map((item, index) => (
-                  <View key={item.id || index.toString()}>
+                  <View key={`${item.id}_${index}`}>
                     {renderLogItem({ item, index })}
                   </View>
                 ))}

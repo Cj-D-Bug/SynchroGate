@@ -187,7 +187,7 @@ const AttendanceLog = () => {
       attendanceQuery,
       snapshot => {
         console.log('📒 AttendanceLog: snapshot received, size:', snapshot.size);
-        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
         if (data.length) {
           console.log('📒 AttendanceLog: first doc:', { id: data[0].id, ...data[0] });
         }
@@ -513,7 +513,7 @@ const AttendanceLog = () => {
             logs.length > 0 ? (
               <View style={styles.logsListContent}>
                 {logs.map((item, index) => (
-                  <View key={item.id || index.toString()}>
+                  <View key={`${item.id}_${index}`}>
                     {renderLogItem({ item, index })}
                   </View>
                 ))}
@@ -547,7 +547,7 @@ const AttendanceLog = () => {
                   const d = ts?.toDate?.() || new Date(ts);
                   return d?.toDateString?.() === currentDayKey;
                 }).map((item, index) => (
-                  <View key={item.id || index.toString()}>
+                  <View key={`${item.id}_${index}`}>
                     {renderLogItem({ item, index })}
                   </View>
                 ))}

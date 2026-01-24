@@ -470,7 +470,7 @@ const Dashboard = () => {
         const scansRef = collection(db, 'student_attendances', String(studentDocId), 'scans');
         const scansQuery = query(scansRef, orderBy('timeOfScanned', 'desc'));
         const unsubscribe = onSnapshot(scansQuery, (snapshot) => {
-          const docs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+          const docs = snapshot.docs.map(d => ({ ...d.data(), id: d.id }));
           // Annotate with student info
           const annotated = docs.map(log => ({
             ...log,
@@ -1159,7 +1159,7 @@ const Dashboard = () => {
             {allLogs.length > 0 ? (
               <View style={styles.logsListContent}>
                 {allLogs.map((item, index) => (
-                  <View key={item.id || `${item._studentId}-${index}`}>
+                  <View key={`${item.id}_${index}`}>
                     {renderLogItem({ item, index })}
                   </View>
                 ))}
