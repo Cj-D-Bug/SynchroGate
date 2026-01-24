@@ -19,8 +19,9 @@ const notifiedAlerts = new Map(); // Key: `${alertId}_${userId}`, Value: timesta
 
 /**
  * CRITICAL: Verify user is logged in and active
- * Returns true only if user has ALL required fields and logged in within 24 HOURS
- * This prevents sending notifications to users who logged out or are inactive
+ * Returns true only if user has required fields (role, uid) and logged in within 12 HOURS
+ * NOTE: fcmToken is NOT required here - we check for it later when actually sending notifications
+ * This allows us to check for FCM tokens in parent_student_links as a fallback
  */
 const isUserLoggedIn = (userData) => {
   if (!userData) {
@@ -28,8 +29,8 @@ const isUserLoggedIn = (userData) => {
     return false;
   }
   
-  // Must have role, uid, and fcmToken
-  if (!userData.role || !userData.uid || !userData.fcmToken) {
+  // Must have role and uid (fcmToken will be checked later when sending)
+  if (!userData.role || !userData.uid) {
     console.log('⏭️ isUserLoggedIn: missing required fields', {
       hasRole: !!userData.role,
       hasUid: !!userData.uid,
@@ -313,13 +314,62 @@ const sendPushForAlert = async (alert, role, userId) => {
     const title = alert.title || 'New Alert';
     const body = alert.message || alert.body || 'You have a new alert';
     
-    if (!userData.fcmToken) {
-      console.log(`⏭️ [${role}] SKIP - user ${userId} has no FCM token`);
+    // Check for FCM token - try user document first, then check links for parents
+    let fcmTokenToUse = userData.fcmToken;
+    
+    // For parents, check parent_student_links for FCM token as fallback
+    if (!fcmTokenToUse && role === 'parent') {
+      const alertStudentId = alert.studentId || alert.student_id;
+      if (alertStudentId) {
+        try {
+          const parentIdNumber = userData?.parentId || userData?.parentIdNumber || userId;
+          
+          // Try to find active link with FCM token
+          const linkQuery = await firestore.collection('parent_student_links')
+            .where('parentId', '==', userData.uid)
+            .where('studentId', '==', String(alertStudentId))
+            .where('status', '==', 'active')
+            .limit(1)
+            .get();
+          
+          if (!linkQuery.empty) {
+            const linkData = linkQuery.docs[0].data();
+            fcmTokenToUse = linkData?.parentFcmToken || null;
+            if (fcmTokenToUse) {
+              console.log(`✅ [${role}] Found FCM token in parent_student_links for ${userId}`);
+            }
+          }
+          
+          // If still no token, try querying by parentIdNumber
+          if (!fcmTokenToUse && parentIdNumber && parentIdNumber !== userData.uid) {
+            const linkQuery2 = await firestore.collection('parent_student_links')
+              .where('parentIdNumber', '==', String(parentIdNumber))
+              .where('studentIdNumber', '==', String(alertStudentId))
+              .where('status', '==', 'active')
+              .limit(1)
+              .get();
+            
+            if (!linkQuery2.empty) {
+              const linkData2 = linkQuery2.docs[0].data();
+              fcmTokenToUse = linkData2?.parentFcmToken || null;
+              if (fcmTokenToUse) {
+                console.log(`✅ [${role}] Found FCM token in parent_student_links (by parentIdNumber) for ${userId}`);
+              }
+            }
+          }
+        } catch (linkError) {
+          console.log(`ℹ️ [${role}] Error checking links for FCM token:`, linkError.message);
+        }
+      }
+    }
+    
+    if (!fcmTokenToUse) {
+      console.log(`⏭️ [${role}] SKIP - user ${userId} has no FCM token (checked user document${role === 'parent' ? ' and parent_student_links' : ''})`);
       return;
     }
     
     await pushService.sendPush(
-      userData.fcmToken,
+      fcmTokenToUse,
       title,
       body,
       {
@@ -1151,8 +1201,53 @@ const initializeConversationMessagesListener = () => {
                   continue;
                 }
                 
-                if (!recipientData.fcmToken) {
-                  console.log(`⏭️ [MESSAGE LISTENER] SKIP - recipient ${recipientId} has no FCM token`);
+                // Check for FCM token - try user document first, then check links for parents
+                let fcmTokenToUse = recipientData.fcmToken;
+                
+                // For parents, check parent_student_links for FCM token as fallback
+                if (!fcmTokenToUse && recipientRole === 'parent') {
+                  // Try to find FCM token in any active link for this parent
+                  try {
+                    const parentIdNumber = recipientData?.parentId || recipientData?.parentIdNumber || recipientId;
+                    
+                    // Query by parent UID
+                    const linkQuery1 = await firestore.collection('parent_student_links')
+                      .where('parentId', '==', recipientData.uid)
+                      .where('status', '==', 'active')
+                      .limit(1)
+                      .get();
+                    
+                    if (!linkQuery1.empty) {
+                      const linkData = linkQuery1.docs[0].data();
+                      fcmTokenToUse = linkData?.parentFcmToken || null;
+                      if (fcmTokenToUse) {
+                        console.log(`✅ [MESSAGE LISTENER] Found FCM token in parent_student_links for parent ${recipientId}`);
+                      }
+                    }
+                    
+                    // If still no token, try querying by parentIdNumber
+                    if (!fcmTokenToUse && parentIdNumber && parentIdNumber !== recipientData.uid) {
+                      const linkQuery2 = await firestore.collection('parent_student_links')
+                        .where('parentIdNumber', '==', String(parentIdNumber))
+                        .where('status', '==', 'active')
+                        .limit(1)
+                        .get();
+                      
+                      if (!linkQuery2.empty) {
+                        const linkData2 = linkQuery2.docs[0].data();
+                        fcmTokenToUse = linkData2?.parentFcmToken || null;
+                        if (fcmTokenToUse) {
+                          console.log(`✅ [MESSAGE LISTENER] Found FCM token in parent_student_links (by parentIdNumber) for parent ${recipientId}`);
+                        }
+                      }
+                    }
+                  } catch (linkError) {
+                    console.log(`ℹ️ [MESSAGE LISTENER] Error checking links for FCM token:`, linkError.message);
+                  }
+                }
+                
+                if (!fcmTokenToUse) {
+                  console.log(`⏭️ [MESSAGE LISTENER] SKIP - recipient ${recipientId} has no FCM token (checked user document${recipientRole === 'parent' ? ' and parent_student_links' : ''})`);
                   continue;
                 }
                 
@@ -1167,7 +1262,7 @@ const initializeConversationMessagesListener = () => {
                 const body = String(message.text || '').substring(0, 100); // Limit body length
                 
                 await pushService.sendPush(
-                  recipientData.fcmToken,
+                  fcmTokenToUse,
                   title,
                   body,
                   {
