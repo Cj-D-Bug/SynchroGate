@@ -1,0 +1,79 @@
+{
+  "expo": {
+    "name": "SynchroGate",
+    "slug": "synchrogate",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./src/assets/SG.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./src/assets/SG.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "updates": {
+      "fallbackToCacheTimeout": 0
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.palabay.synchrogate",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "googleServicesFile": "./GoogleService-Info.plist"
+    },
+    "android": {
+      "statusBar": {
+        "backgroundColor": "#000000",
+        "barStyle": "light-content",
+        "translucent": false
+      },
+      "adaptiveIcon": {
+        "foregroundImage": "./src/assets/SG.png",
+        "backgroundColor": "#ffffff"
+      },
+      "permissions": [
+        "CAMERA",
+        "INTERNET",
+        "POST_NOTIFICATIONS",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE"
+      ],
+      "package": "com.palabay.synchrogate",
+      "googleServicesFile": "./google-services.json"
+    },
+    "web": {
+      "favicon": "./src/assets/SG.png"
+    },
+    "plugins": [
+      "@react-native-firebase/app",
+      "@react-native-firebase/messaging",
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "icon": "./src/assets/SG.png"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      "./plugins/withFixManifestMerger"
+    ],
+    "extra": {
+      "env": "production",
+      "eas": {
+        "projectId": "2539a094-86a2-4b3c-b1b3-998dbf413c58"
+      }
+    },
+    "owner": "chisanaosama2004"
+  }
+}

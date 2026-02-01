@@ -1,39 +1,99 @@
 # Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
 
-# dependencies
+# Dependencies
 node_modules/
+**/node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Logs
+logs/
+**/*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+npm-debug.*
+yarn-debug.*
+yarn-error.*
 
 # Expo
 .expo/
-dist/
-web-build/
+.expo-shared/
+expo-web/
 expo-env.d.ts
+
+# Build outputs
+dist/
+build/
+web-build/
+android/app/build/
+ios/build/
+.parcel-cache/
+.turbo/
 
 # Native
 android/
 ios/
 .kotlin/
 *.orig.*
-*.jks
-*.p8
-*.p12
-*.key
-*.mobileprovision
 
-# Metro
+# React Native / Expo caches
+.gradle/
 .metro-health-check*
 
-# debug
-npm-debug.*
-yarn-debug.*
-yarn-error.*
+# Debug
+*.tsbuildinfo
 
 # macOS
 .DS_Store
 *.pem
 
-# local env files
-.env*.local
+# Windows
+Thumbs.db
+ehthumbs.db
 
-# typescript
-*.tsbuildinfo
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Env and secrets
+.env
+.env.*
+**/.env
+**/.env.*
+.env*.local
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Security keys and certificates
+*.keystore
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+google-services.json
+GoogleService-Info.plist
+# Exception: Allow google-services.json in frontend for EAS builds
+!frontend/google-services.json
+
+# Firebase local emulators
+firebase-debug.log
+
+# Firebase Admin SDK credentials (sensitive)
+**/*firebase-adminsdk*.json
+backend/guardientry-database-firebase-adminsdk-*.json
+frontend/guardientry-database-firebase-adminsdk-*.json
+
+# Misc
+.cache/
+coverage/
+.nyc_output/
+.eslintcache
+
+# Lock Firebase rule debug artifacts
+frontend/debug-*.json
