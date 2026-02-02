@@ -21,7 +21,7 @@ import {
 import theme from '../../utils/theme';
 import { Ionicons } from '@expo/vector-icons';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, setDoc, collection, query, where, getDocs, getDoc } from 'firebase/firestore';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { auth, db } from '../../utils/firebaseConfig';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -921,6 +921,39 @@ const RegisterScreen = () => {
       await setDoc(doc(db, 'users', documentId), userData);
 
       console.log('User data saved to Firestore:', userData);
+
+      // Create admin alert for student verification if student registered
+      if (isStudentRole && !userData.isVerify) {
+        try {
+          const adminAlertsRef = doc(db, 'admin_alerts', 'inbox');
+          const adminAlertsSnap = await getDoc(adminAlertsRef);
+          const existingItems = adminAlertsSnap.exists() 
+            ? (Array.isArray(adminAlertsSnap.data()?.items) ? adminAlertsSnap.data().items : [])
+            : [];
+          
+          const studentName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || 'Student';
+          const verificationAlert = {
+            id: `student_verification_${documentId}_${Date.now()}`,
+            type: 'student_verification_pending',
+            title: 'Student Verification Required',
+            message: `${studentName} (${studentId}) has registered and needs verification. Please verify the student account to allow access.`,
+            createdAt: new Date().toISOString(),
+            status: 'unread',
+            studentId: studentId,
+            studentName: studentName,
+            yearLevel: userData.yearLevel || '',
+            course: userData.course || '',
+            section: userData.section || '',
+          };
+          
+          const updatedItems = [verificationAlert, ...existingItems];
+          await setDoc(adminAlertsRef, { items: updatedItems }, { merge: true });
+          console.log('✅ Admin alert created for student verification:', verificationAlert.id);
+        } catch (alertError) {
+          console.error('Error creating admin alert for student verification:', alertError);
+          // Don't fail registration if alert creation fails
+        }
+      }
 
       // Show success modal, then navigate to Login (role-dependent)
       const successText = `Registration successful!${role === 'parent' ? `\n\nYour Parent ID is: ${generatedParentId}\n\nPlease save this ID for future reference.` : ''}`;

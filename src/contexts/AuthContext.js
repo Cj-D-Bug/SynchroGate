@@ -374,6 +374,39 @@ export const AuthProvider = ({ children }) => {
       
       console.log("User data saved to Firestore:", userData); // Debug log
 
+      // Create admin alert for student verification if student registered
+      if (isStudentRole && !userData.isVerify) {
+        try {
+          const adminAlertsRef = doc(db, 'admin_alerts', 'inbox');
+          const adminAlertsSnap = await getDoc(adminAlertsRef);
+          const existingItems = adminAlertsSnap.exists() 
+            ? (Array.isArray(adminAlertsSnap.data()?.items) ? adminAlertsSnap.data().items : [])
+            : [];
+          
+          const studentName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || 'Student';
+          const verificationAlert = {
+            id: `student_verification_${documentId}_${Date.now()}`,
+            type: 'student_verification_pending',
+            title: 'Student Verification Required',
+            message: `${studentName} (${studentId}) has registered and needs verification. Please verify the student account to allow access.`,
+            createdAt: new Date().toISOString(),
+            status: 'unread',
+            studentId: studentId,
+            studentName: studentName,
+            yearLevel: userData.yearLevel || '',
+            course: userData.course || '',
+            section: userData.section || '',
+          };
+          
+          const updatedItems = [verificationAlert, ...existingItems];
+          await setDoc(adminAlertsRef, { items: updatedItems }, { merge: true });
+          console.log('✅ Admin alert created for student verification:', verificationAlert.id);
+        } catch (alertError) {
+          console.error('Error creating admin alert for student verification:', alertError);
+          // Don't fail registration if alert creation fails
+        }
+      }
+
       setUser(userData);
       setRole(userData.role);
       await AsyncStorage.setItem("user", JSON.stringify(userData));

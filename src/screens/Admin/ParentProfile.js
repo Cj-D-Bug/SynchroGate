@@ -117,22 +117,22 @@ const ParentProfile = () => {
     }
 
     // Try multiple parent ID variations
-    const parentId = currentParent?.parentId || currentParent?.id || currentParent?.uid;
+    const parentId = currentParent?.parentId;
     const parentIdNumber = currentParent?.parentIdNumber;
+    const parentUid = currentParent?.uid;
+    const parentDocId = currentParent?.id;
     
     console.log('🔍 ParentProfile - Checking linked students for:', { 
       id: currentParent?.id,
       uid: currentParent?.uid,
       parentId: currentParent?.parentId,
       parentIdNumber: currentParent?.parentIdNumber,
-      usingParentId: parentId,
-      usingParentIdNumber: parentIdNumber
     });
 
     // Use real-time listener instead of one-time query
     const queries = [];
     
-    // Primary query: by parentId (UID) with active status
+    // Query by all possible parent ID fields
     if (parentId) {
       queries.push(query(
         collection(db, 'parent_student_links'),
@@ -141,7 +141,6 @@ const ParentProfile = () => {
       ));
     }
     
-    // Secondary query: by parentIdNumber (canonical) with active status
     if (parentIdNumber && parentIdNumber !== parentId) {
       queries.push(query(
         collection(db, 'parent_student_links'),
@@ -149,8 +148,35 @@ const ParentProfile = () => {
         where('status', '==', 'active')
       ));
     }
+    
+    if (parentUid && parentUid !== parentId && parentUid !== parentIdNumber) {
+      queries.push(query(
+        collection(db, 'parent_student_links'),
+        where('parentId', '==', parentUid),
+        where('status', '==', 'active')
+      ));
+      queries.push(query(
+        collection(db, 'parent_student_links'),
+        where('parentUid', '==', parentUid),
+        where('status', '==', 'active')
+      ));
+      queries.push(query(
+        collection(db, 'parent_student_links'),
+        where('uid', '==', parentUid),
+        where('status', '==', 'active')
+      ));
+    }
+    
+    if (parentDocId && parentDocId !== parentId && parentDocId !== parentIdNumber && parentDocId !== parentUid) {
+      queries.push(query(
+        collection(db, 'parent_student_links'),
+        where('parentId', '==', parentDocId),
+        where('status', '==', 'active')
+      ));
+    }
 
     if (queries.length === 0) {
+      console.log('⚠️ No queries to execute - no parent IDs found');
       setIsLinked(false);
       setLinkedStudents([]);
       return;
@@ -160,35 +186,12 @@ const ParentProfile = () => {
     const unsubscribes = [];
     const allStudentsMap = new Map(); // Use Map to deduplicate by studentId
     
-    const processSnapshot = (snapshot, queryType) => {
-      console.log(`📥 ${queryType} snapshot update: ${snapshot.docs.length} documents`);
-      
-      snapshot.docs.forEach(doc => {
-        const data = doc.data();
-        const studentId = data.studentId || data.studentIdNumber;
-        const studentName = data.studentName || '';
-        
-        if (!studentId) {
-          console.log('⚠️ Document missing studentId:', doc.id);
-          return;
-        }
-        
-        // Only process active links
-        if (data.status === 'active') {
-          allStudentsMap.set(studentId, {
-            id: doc.id,
-            studentName: studentName,
-            studentId: studentId,
-            relationship: data.relationship || '',
-          });
-        }
-      });
-      
-      // Convert map to array and update state
+    const updateStudentsState = () => {
       const studentsArray = Array.from(allStudentsMap.values());
+      console.log(`📊 Total unique students found: ${studentsArray.length}`);
       
       // Fetch missing student names
-      const studentsToFetch = studentsArray.filter(s => !s.studentName || s.studentName.trim() === '');
+      const studentsToFetch = studentsArray.filter(s => !s.studentName || s.studentName.trim() === '' || s.studentName === 'Student');
       
       if (studentsToFetch.length > 0) {
         Promise.all(
@@ -202,19 +205,26 @@ const ParentProfile = () => {
                 const lastName = studentData.lastName || '';
                 const middleName = studentData.middleName || '';
                 const fullName = [firstName, middleName, lastName].filter(Boolean).join(' ').trim();
-                student.studentName = fullName || 'Student';
-              } else {
-                student.studentName = 'Student';
+                if (fullName) {
+                  // Update the map with the fetched name
+                  allStudentsMap.set(student.studentId, {
+                    ...student,
+                    studentName: fullName,
+                  });
+                }
               }
             } catch (error) {
               console.log(`Error fetching student ${student.studentId}:`, error);
-              student.studentName = 'Student';
             }
             return student;
           })
         ).then(() => {
           // Update state after fetching names
           const finalStudents = Array.from(allStudentsMap.values())
+            .map(s => ({
+              ...s,
+              studentName: s.studentName && s.studentName !== 'Student' ? s.studentName : 'Student'
+            }))
             .sort((a, b) => String(a.studentName || '').toLowerCase().localeCompare(String(b.studentName || '').toLowerCase()));
           
           console.log(`✅ Final students count: ${finalStudents.length}`, finalStudents);
@@ -230,6 +240,10 @@ const ParentProfile = () => {
       } else {
         // All students have names, update state immediately
         const finalStudents = studentsArray
+          .map(s => ({
+            ...s,
+            studentName: s.studentName && s.studentName !== 'Student' ? s.studentName : 'Student'
+          }))
           .sort((a, b) => String(a.studentName || '').toLowerCase().localeCompare(String(b.studentName || '').toLowerCase()));
         
         console.log(`✅ Students with names: ${finalStudents.length}`, finalStudents);
@@ -243,16 +257,63 @@ const ParentProfile = () => {
         }
       }
     };
+    
+    const processSnapshot = (snapshot, queryType) => {
+      console.log(`📥 ${queryType} snapshot update: ${snapshot.docs.length} documents`);
+      
+      snapshot.docs.forEach(doc => {
+        const data = doc.data();
+        const studentId = data.studentId || data.studentIdNumber;
+        let studentName = String(data.studentName || '').trim();
+        
+        if (!studentId) {
+          console.log('⚠️ Document missing studentId:', doc.id, data);
+          return;
+        }
+        
+        // Only process active links
+        if (data.status === 'active') {
+          // Use existing entry if it has a better name, otherwise update
+          const existing = allStudentsMap.get(studentId);
+          if (!existing || (!existing.studentName || existing.studentName.trim() === '')) {
+            allStudentsMap.set(studentId, {
+              id: doc.id,
+              studentName: studentName,
+              studentId: studentId,
+              relationship: data.relationship || '',
+            });
+          } else if (studentName && studentName !== 'Student') {
+            // Update if we have a better name
+            allStudentsMap.set(studentId, {
+              ...existing,
+              studentName: studentName,
+            });
+          }
+        } else {
+          console.log(`⚠️ Link ${doc.id} has status: ${data.status}, skipping`);
+        }
+      });
+      
+      // Update state after processing this snapshot
+      updateStudentsState();
+    };
 
     // Set up listeners for each query
     queries.forEach((q, index) => {
       const unsubscribe = onSnapshot(
         q,
-        (snapshot) => processSnapshot(snapshot, `Query ${index + 1}`),
+        (snapshot) => {
+          processSnapshot(snapshot, `Query ${index + 1}`);
+        },
         (error) => {
-          console.error(`Error in listener ${index + 1}:`, error);
-          // On error, try to get data once
-          getDocs(q).then(snapshot => processSnapshot(snapshot, `Query ${index + 1} (fallback)`));
+          console.error(`❌ Error in listener ${index + 1}:`, error);
+          // On error, try to get data once as fallback
+          getDocs(q).then(snapshot => {
+            console.log(`🔄 Fallback query ${index + 1} returned ${snapshot.docs.length} docs`);
+            processSnapshot(snapshot, `Query ${index + 1} (fallback)`);
+          }).catch(err => {
+            console.error(`❌ Fallback query ${index + 1} also failed:`, err);
+          });
         }
       );
       unsubscribes.push(unsubscribe);
@@ -268,7 +329,7 @@ const ParentProfile = () => {
         }
       });
     };
-  }, [currentParent?.id, currentParent?.uid, currentParent?.parentId, currentParent?.parentIdNumber]);
+  }, [currentParent?.id, currentParent?.uid, currentParent?.parentId, currentParent?.parentIdNumber, currentParent]);
 
   const fullName = `${currentParent?.lastName || ""}, ${currentParent?.firstName || ""} ${currentParent?.middleName || ""}`.trim();
 

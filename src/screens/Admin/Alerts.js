@@ -424,9 +424,11 @@ export default function AdminAlerts() {
               if (filter === 'read') return a.status === 'read';
               return true;
             }).map((a) => {
-              const typeColor = a.type === 'qr_request' ? '#10B981' : '#2563EB';
-              const iconBg = a.type === 'qr_request' ? '#ECFDF5' : '#EFF6FF';
-              const iconName = a.type === 'qr_request' ? 'link-variant' : 'information-circle-outline';
+              const isQrRequest = a.type === 'qr_request';
+              const isStudentVerification = a.type === 'student_verification_pending';
+              const typeColor = isQrRequest ? '#10B981' : (isStudentVerification ? '#F59E0B' : '#2563EB');
+              const iconBg = isQrRequest ? '#ECFDF5' : (isStudentVerification ? '#FEF3C7' : '#EFF6FF');
+              const iconName = isQrRequest ? 'link-variant' : (isStudentVerification ? 'school-outline' : 'information-circle-outline');
               const createdLabel = new Date(a.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
               return (
                 <TouchableOpacity key={a.id} activeOpacity={0.8} onPress={() => onTapAlert(a)} style={styles.itemRow}>
@@ -434,8 +436,12 @@ export default function AdminAlerts() {
                     <MaterialCommunityIcons name={iconName} size={14} color={typeColor} />
                   </View>
                   <View style={styles.itemBody}>
-                    <Text style={[styles.itemTitle, a.status !== 'read' && styles.itemTitleUnread]} numberOfLines={1}>{a.title || (a.type === 'qr_request' ? 'QR Code Generation Request' : 'Alert')}</Text>
-                    <Text style={[styles.itemMeta, a.status !== 'read' && styles.itemMetaUnread]} numberOfLines={2}>{a.message || `Request for ${a.studentName || a.studentId || 'Student'}`}</Text>
+                    <Text style={[styles.itemTitle, a.status !== 'read' && styles.itemTitleUnread]} numberOfLines={1}>
+                      {a.title || (a.type === 'qr_request' ? 'QR Code Generation Request' : (a.type === 'student_verification_pending' ? 'Student Verification Required' : 'Alert'))}
+                    </Text>
+                    <Text style={[styles.itemMeta, a.status !== 'read' && styles.itemMetaUnread]} numberOfLines={2}>
+                      {a.message || (a.type === 'student_verification_pending' ? `New student ${a.studentName || a.studentId || 'Student'} needs verification` : `Request for ${a.studentName || a.studentId || 'Student'}`)}
+                    </Text>
                   </View>
                   <Text style={[styles.itemTime, a.status !== 'read' && { color: '#2563EB' }]}>{createdLabel}</Text>
                 </TouchableOpacity>
@@ -450,7 +456,7 @@ export default function AdminAlerts() {
               </View>
               <Text style={styles.emptyTitle}>No Alerts</Text>
               <Text style={styles.emptySubtext}>
-                No alerts are currently available. Alerts will appear here when students request QR code generation or when system notifications are sent to administrators.
+                No alerts are currently available. Alerts will appear here when students register and need verification, request QR code generation, or when system notifications are sent to administrators.
               </Text>
             </View>
           </View>

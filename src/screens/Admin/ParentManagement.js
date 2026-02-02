@@ -75,7 +75,14 @@ const ParentManagement = () => {
       const usersRef = collection(db, 'users');
       const q = query(usersRef, where('role', '==', 'parent'));
       const snap = await getDocs(q);
-      const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .filter(p => {
+          // Only include parents with parentId and valid name (firstName or lastName)
+          if (!p.parentId) return false;
+          const firstName = String(p.firstName || '').trim();
+          const lastName = String(p.lastName || '').trim();
+          return firstName.length > 0 || lastName.length > 0;
+        });
       // Sort by last name, then first name
       items.sort((a, b) => {
         const al = String(a.lastName || '').toLowerCase();
@@ -89,7 +96,7 @@ const ParentManagement = () => {
       // Fetch linked students per parent
       const withLinks = await Promise.all(items.map(async (p) => {
         try {
-          const pid = p.uid || p.id;
+          const pid = p.parentId || p.id;
           if (!pid) return { ...p, linkedStudents: [] };
           const linksQ = query(collection(db, 'parent_student_links'), where('parentId', '==', pid), where('status', '==', 'active'));
           const linkSnap = await getDocs(linksQ);
@@ -109,12 +116,20 @@ const ParentManagement = () => {
           return { ...p, linkedStudents: [] };
         }
       }));
-      setParents(withLinks);
+      // Filter out any parents with blank names before setting state
+      const validParents = withLinks.filter(p => {
+        const firstName = String(p.firstName || '').trim();
+        const lastName = String(p.lastName || '').trim();
+        return firstName.length > 0 || lastName.length > 0;
+      });
+      setParents(validParents);
       
-      // Calculate and pass counts to AdminTopHeader
-      const counts = withLinks.reduce((acc, p) => {
-        const pid = p.uid || p.id;
-        const arr = p.linkedStudents || [];
+      // Calculate and pass counts to AdminTopHeader (only count parents with valid names)
+      const counts = validParents.reduce((acc, p) => {
+        // Check both linkedStudents array and linkedByParent state
+        const parentId = p.parentId || p.id;
+        const parentUid = p.uid || p.id;
+        const arr = p.linkedStudents || linkedByParent[parentId] || linkedByParent[parentUid] || linkedByParent[p.id] || [];
         if (arr.length > 0) acc.linked += 1; else acc.unlinked += 1;
         return acc;
       }, { linked: 0, unlinked: 0 });
@@ -218,21 +233,32 @@ const ParentManagement = () => {
       const next = {};
       snap.docs.forEach(docSnap => {
         const x = docSnap.data() || {};
-        const pid = x.parentId;
+        // Try multiple parent ID fields to match correctly
+        const pid = x.parentId || x.parentIdNumber || x.parentUid || x.uid;
         if (!pid) return;
-        if (!next[pid]) next[pid] = [];
+        // Store under all possible ID variations for lookup
+        const allIds = [pid];
+        if (x.parentIdNumber && x.parentIdNumber !== pid) allIds.push(x.parentIdNumber);
+        if (x.parentUid && x.parentUid !== pid) allIds.push(x.parentUid);
+        if (x.uid && x.uid !== pid) allIds.push(x.uid);
+        
         const name = String(x.studentName || '').trim();
         if (name) {
-          if (name.includes(',')) next[pid].push(name);
-          else {
+          const formattedName = name.includes(',') ? name : (() => {
             const parts = name.split(/\s+/);
-            if (parts.length === 1) next[pid].push(parts[0]);
-            else {
-              const last = parts.pop();
-              const first = parts.join(' ');
-              next[pid].push(`${last}, ${first}`);
+            if (parts.length === 1) return parts[0];
+            const last = parts.pop();
+            const first = parts.join(' ');
+            return `${last}, ${first}`;
+          })();
+          
+          // Store under all ID variations
+          allIds.forEach(id => {
+            if (!next[id]) next[id] = [];
+            if (!next[id].includes(formattedName)) {
+              next[id].push(formattedName);
             }
-          }
+          });
         }
       });
       setLinkedByParent(next);
@@ -250,11 +276,17 @@ const ParentManagement = () => {
     return () => unsub();
   }, []);
 
-  // Update counts when parents or linkedByParent changes
+  // Update counts when parents or linkedByParent changes (only count parents with valid names)
   useEffect(() => {
-    const counts = parents.reduce((acc, p) => {
-      const pid = p.uid || p.id;
-      const arr = linkedByParent[pid] || [];
+    const counts = parents.filter(p => {
+      const firstName = String(p.firstName || '').trim();
+      const lastName = String(p.lastName || '').trim();
+      return firstName.length > 0 || lastName.length > 0;
+    }).reduce((acc, p) => {
+      // Check multiple ID variations to find linked students
+      const parentId = p.parentId || p.id;
+      const parentUid = p.uid || p.id;
+      const arr = linkedByParent[parentId] || linkedByParent[parentUid] || linkedByParent[p.id] || [];
       if (arr.length > 0) acc.linked += 1; else acc.unlinked += 1;
       return acc;
     }, { linked: 0, unlinked: 0 });
@@ -287,7 +319,7 @@ const ParentManagement = () => {
   const loadLinkedForParent = async (parent) => {
     try {
       setLinkedLoading(true);
-      const pid = parent?.uid || parent?.id || '';
+      const pid = parent?.parentId || parent?.id || '';
       if (!pid) { setLinkedStudents([]); setLinkedLoading(false); return; }
       const linksQ = query(collection(db, 'parent_student_links'), where('parentId', '==', pid), where('status', '==', 'active'));
       const snap = await getDocs(linksQ);
@@ -369,14 +401,21 @@ const ParentManagement = () => {
               }
               return (
                 <>
-                  {results.map((p, index) => {
-                    const pid = p.id || p.uid;
-                    const arr = linkedByParent[pid] || [];
+                  {results.filter(p => {
+                    // Filter out parents with blank names
+                    const first = String(p.firstName || '').trim();
+                    const last = String(p.lastName || '').trim();
+                    return first.length > 0 || last.length > 0;
+                  }).map((p, index) => {
+                    // Check multiple ID variations to find linked students
+                    const parentId = p.parentId || p.id;
+                    const parentUid = p.uid || p.id;
+                    const arr = linkedByParent[parentId] || linkedByParent[parentUid] || linkedByParent[p.id] || [];
                     const isLinked = arr.length > 0;
                     const rowStyle = isLinked ? styles.parentRowLinked : styles.parentRowUnlinked;
                     return (
                       <TouchableOpacity 
-                        key={p.id || p.uid || `parent-${index}`} 
+                        key={p.id || p.parentId || `parent-${index}`} 
                         style={rowStyle}
                         activeOpacity={0.7}
                         onPress={() => openDetail(p)}
@@ -390,7 +429,7 @@ const ParentManagement = () => {
                             const last = String(p.lastName || '').trim();
                             const mid = String(p.middleName || p.middle || p.middleInitial || '').trim();
                             const mi = mid ? ` ${mid.charAt(0).toUpperCase()}.` : '';
-                            return `${last}${last && (first || mi) ? ', ' : ''}${first}${mi}`.trim() || 'Unknown Parent';
+                            return `${last}${last && (first || mi) ? ', ' : ''}${first}${mi}`.trim();
                           })()}</Text>
                         </View>
                         <View style={isLinked ? styles.linkedBadge : styles.unlinkedBadge}>
@@ -426,14 +465,21 @@ const ParentManagement = () => {
         ) : (
           <>
             <View>
-              {parents.map((p, index) => {
-                const pid = p.id || p.uid;
-                const arr = linkedByParent[pid] || [];
+              {parents.filter(p => {
+                // Filter out parents with blank names
+                const first = String(p.firstName || '').trim();
+                const last = String(p.lastName || '').trim();
+                return first.length > 0 || last.length > 0;
+              }).map((p, index) => {
+                // Check multiple ID variations to find linked students
+                const parentId = p.parentId || p.id;
+                const parentUid = p.uid || p.id;
+                const arr = linkedByParent[parentId] || linkedByParent[parentUid] || linkedByParent[p.id] || [];
                 const isLinked = arr.length > 0;
                 const rowStyle = isLinked ? styles.parentRowLinked : styles.parentRowUnlinked;
                 return (
                   <TouchableOpacity 
-                    key={p.id || p.uid || `parent-${index}`} 
+                    key={p.id || p.parentId || `parent-${index}`} 
                     style={rowStyle}
                     activeOpacity={0.7}
                     onPress={() => openDetail(p)}
@@ -448,7 +494,7 @@ const ParentManagement = () => {
                         const mid = String(p.middleName || p.middle || p.middleInitial || '').trim();
                         const mi = mid ? ` ${mid.charAt(0).toUpperCase()}.` : '';
                         const name = `${last}${last && (first || mi) ? ', ' : ''}${first}${mi}`.trim();
-                        return name || 'Unknown Parent';
+                        return name;
                       })()}</Text>
                     </View>
                     <View style={isLinked ? styles.linkedBadge : styles.unlinkedBadge}>
@@ -516,7 +562,7 @@ const ParentManagement = () => {
                 <Text style={styles.modernInfoLabel}>Linked Students</Text>
                 <Text style={styles.modernInfoValue}>
                   {(() => {
-                    const pid = detailParent?.uid || detailParent?.id;
+                    const pid = detailParent?.parentId || detailParent?.id;
                     const arr = linkedByParent[pid] || [];
                     if (arr.length === 0) return '—';
                     return arr.join(', ');
