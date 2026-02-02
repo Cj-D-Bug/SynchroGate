@@ -1472,6 +1472,27 @@ const StudentProfile = () => {
             </Text>
           </View>
           <View style={styles.infoRow}>
+            <Text style={styles.label}>Parent / Guardian Gender</Text>
+            <Text style={styles.value}>
+              {currentStudent?.parentGender || '—'}
+            </Text>
+          </View>
+          <View style={styles.infoRow}>
+            <Text style={styles.label}>Parent / Guardian Age</Text>
+            <Text style={styles.value}>
+              {(() => {
+                const b = currentStudent?.parentBirthday;
+                if (!b) return '—';
+                try {
+                  const age = calculateAgeFromBirthday(String(b));
+                  return age || '—';
+                } catch {
+                  return '—';
+                }
+              })()}
+            </Text>
+          </View>
+          <View style={styles.infoRow}>
             <Text style={styles.label}>Parent / Guardian Birthday</Text>
             <Text style={styles.value}>
               {(() => {

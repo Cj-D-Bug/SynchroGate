@@ -251,6 +251,7 @@ const RegisterScreen = () => {
   const [parentLastName, setParentLastName] = useState('');
   const [parentFirstName, setParentFirstName] = useState('');
   const [parentMiddleName, setParentMiddleName] = useState('');
+  const [parentGender, setParentGender] = useState('');
   const [gender, setGender] = useState('');
   const [age, setAge] = useState('');
   const [birthday, setBirthday] = useState(null);
@@ -656,6 +657,11 @@ const RegisterScreen = () => {
           else if (value.trim().length < 2) error = 'Parent middle name must be at least 2 characters';
         }
         break;
+      case 'parentGender':
+        if (role !== 'parent') {
+          if (!value) error = 'Parent / Guardian gender is required';
+        }
+        break;
       case 'gender':
         if (!value) error = 'Gender is required';
         break;
@@ -758,6 +764,7 @@ const RegisterScreen = () => {
         case 'parentLastName': value = parentLastName; break;
         case 'parentFirstName': value = parentFirstName; break;
         case 'parentMiddleName': value = parentMiddleName; break;
+        case 'parentGender': value = parentGender; break;
         case 'gender': value = gender; break;
         case 'age': value = age; break;
         case 'birthday': value = birthday; break;
@@ -808,6 +815,7 @@ const RegisterScreen = () => {
         'parentLastName',
         'parentFirstName',
         'parentMiddleName',
+        'parentGender',
         'parentBirthday',
         'parentContactNumber',
         'parentAddress',
@@ -822,6 +830,7 @@ const RegisterScreen = () => {
         case 'parentLastName': return parentLastName;
         case 'parentFirstName': return parentFirstName;
         case 'parentMiddleName': return parentMiddleName;
+        case 'parentGender': return parentGender;
         case 'gender': return gender;
         case 'age': return age;
         case 'birthday': return birthday;
@@ -988,6 +997,7 @@ const RegisterScreen = () => {
         parentLastName: isStudentRole ? parentLastName.trim() : '',
         parentFirstName: isStudentRole ? parentFirstName.trim() : '',
         parentMiddleName: isStudentRole ? parentMiddleName.trim() : '',
+        parentGender: isStudentRole ? parentGender : '',
         parentBirthday: isStudentRole && parentBirthday instanceof Date
           ? parentBirthday.toISOString().split('T')[0]
           : null,
@@ -1388,7 +1398,7 @@ const RegisterScreen = () => {
       {/* Parent / Guardian Information (for students) */}
       {role !== 'parent' && (
         <>
-          <Text style={[styles.title, { fontSize: 16, marginTop: 14, marginBottom: 4 }]}>
+          <Text style={[styles.title, { fontSize: 20, marginTop: 24, marginBottom: 6 }]}>
             Parent / Guardian Information
           </Text>
           <Text style={[styles.warningText, { fontSize: 10, marginBottom: 10 }]}>
@@ -1396,32 +1406,53 @@ const RegisterScreen = () => {
           </Text>
 
           <InputField
-            label="Parent Last Name"
+            label="Parent / Guardian Last Name"
             value={parentLastName}
             onChangeText={(text) => handleAlphabetic(text, setParentLastName, 20)}
-            placeholder="Enter parent last name"
+            placeholder="Enter parent / guardian last name"
             error={touched.parentLastName ? errors.parentLastName : ''}
             onBlur={() => handleFieldBlur('parentLastName')}
             maxLength={20}
           />
           <InputField
-            label="Parent First Name"
+            label="Parent / Guardian First Name"
             value={parentFirstName}
             onChangeText={(text) => handleAlphabetic(text, setParentFirstName, 20)}
-            placeholder="Enter parent first name"
+            placeholder="Enter parent / guardian first name"
             error={touched.parentFirstName ? errors.parentFirstName : ''}
             onBlur={() => handleFieldBlur('parentFirstName')}
             maxLength={20}
           />
           <InputField
-            label="Parent Middle Name"
+            label="Parent / Guardian Middle Name"
             value={parentMiddleName}
             onChangeText={(text) => handleAlphabetic(text, setParentMiddleName, 20)}
-            placeholder="Enter parent middle name"
+            placeholder="Enter parent / guardian middle name"
             error={touched.parentMiddleName ? errors.parentMiddleName : ''}
             onBlur={() => handleFieldBlur('parentMiddleName')}
             maxLength={20}
           />
+
+          {/* Parent / Guardian Gender */}
+          <View style={styles.row}>
+            <View style={styles.rowInput}>
+              <Text style={styles.label}>Parent / Guardian Gender</Text>
+              <ExpandableDropdown
+                field="parentGender"
+                options={genderOptions}
+                selectedValue={parentGender}
+                onSelect={(value) => {
+                  setParentGender(value);
+                  handleFieldBlur('parentGender', value);
+                }}
+                error={touched.parentGender ? errors.parentGender : ''}
+                placeholder="Select"
+              />
+              {touched.parentGender && errors.parentGender && (
+                <Text style={styles.errorText}>{errors.parentGender}</Text>
+              )}
+            </View>
+          </View>
 
           {/* Parent Birthday */}
           <View style={styles.row}>
@@ -1436,14 +1467,14 @@ const RegisterScreen = () => {
               >
                 <View pointerEvents="none" style={{ width: '100%' }}>
                   <InputField
-                    label="Parent Birthday"
+                    label="Parent / Guardian Birthday"
                     value={
                       parentBirthday instanceof Date
                         ? parentBirthday.toLocaleDateString()
                         : (typeof parentBirthday === 'string' ? parentBirthday : '')
                     }
                     editable={false}
-                    placeholder="Select parent birthdate"
+                    placeholder="Select parent / guardian birthdate"
                     style={{ textAlign: 'center', backgroundColor: '#F0F9FF', width: '100%' }}
                     error={touched.parentBirthday ? errors.parentBirthday : ''}
                     onBlur={() => handleFieldBlur('parentBirthday')}
@@ -1455,7 +1486,7 @@ const RegisterScreen = () => {
 
           {/* Parent Contact Number */}
           <InputField
-            label="Parent Contact Number"
+            label="Parent / Guardian Contact Number"
             value={parentContactNumber}
             onChangeText={(text) => {
               // Reuse contact handler logic for +63 format
@@ -1473,10 +1504,10 @@ const RegisterScreen = () => {
 
           {/* Parent Address */}
           <InputField
-            label="Parent Address"
+            label="Parent / Guardian Address"
             value={parentAddress}
             onChangeText={(text) => handleAlphanumericAddress(text, setParentAddress, 50)}
-            placeholder="Enter parent address"
+            placeholder="Enter parent / guardian address"
             error={touched.parentAddress ? errors.parentAddress : ''}
             onBlur={() => handleFieldBlur('parentAddress')}
             maxLength={50}
@@ -1484,7 +1515,7 @@ const RegisterScreen = () => {
 
           {/* Parent Email (optional) */}
           <InputField
-            label="Parent Email (Optional)"
+            label="Parent / Guardian Email (Optional)"
             value={parentEmail}
             onChangeText={(text) => {
               setParentEmail(text);
