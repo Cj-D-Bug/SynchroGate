@@ -1454,6 +1454,57 @@ const StudentProfile = () => {
               <Text style={styles.value}>N/A</Text>
             )}
           </View>
+
+          {/* Parent / Guardian Information (from registration) */}
+          <View style={styles.infoRow}>
+            <Text style={styles.label}>Parent / Guardian Name</Text>
+            <Text style={styles.value}>
+              {(() => {
+                const ln = currentStudent?.parentLastName || '';
+                const fn = currentStudent?.parentFirstName || '';
+                const mn = currentStudent?.parentMiddleName || '';
+                const full =
+                  [ln, fn, mn].some(Boolean)
+                    ? `${ln}${ln && (fn || mn) ? ', ' : ''}${fn} ${mn}`.trim()
+                    : '';
+                return full || '—';
+              })()}
+            </Text>
+          </View>
+          <View style={styles.infoRow}>
+            <Text style={styles.label}>Parent / Guardian Birthday</Text>
+            <Text style={styles.value}>
+              {(() => {
+                const b = currentStudent?.parentBirthday;
+                if (!b) return '—';
+                try {
+                  const d = new Date(b);
+                  if (isNaN(d.getTime())) return String(b);
+                  return d.toLocaleDateString();
+                } catch {
+                  return String(b);
+                }
+              })()}
+            </Text>
+          </View>
+          <View style={styles.infoRow}>
+            <Text style={styles.label}>Parent / Guardian Contact</Text>
+            <Text style={styles.value}>
+              {currentStudent?.parentContactNumber || '—'}
+            </Text>
+          </View>
+          <View style={styles.infoRow}>
+            <Text style={styles.label}>Parent / Guardian Address</Text>
+            <Text style={styles.value}>
+              {currentStudent?.parentAddress || '—'}
+            </Text>
+          </View>
+          <View style={styles.infoRow}>
+            <Text style={styles.label}>Parent / Guardian Email</Text>
+            <Text style={styles.value}>
+              {currentStudent?.parentEmail || '—'}
+            </Text>
+          </View>
         </View>
       </ScrollView>
 

@@ -4,14 +4,12 @@ const adminController = require('../controllers/adminController');
 const logController = require('../controllers/logController');
 const authMiddleware = require('../middleware/authMiddleware');
 const roleMiddleware = require('../middleware/roleMiddleware');
-const adminSessionLimit = require('../middleware/adminSessionLimit');
 
 const router = express.Router();
 
 // Routes accessible by both Admin and Developer roles
 router.use(authMiddleware);
 router.use(roleMiddleware(['admin', 'developer']));
-router.use(adminSessionLimit);
 
 // Admin & Developer shared routes
 router.get('/users', adminController.getUsers);

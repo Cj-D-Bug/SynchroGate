@@ -3,42 +3,6 @@ const admin = require("firebase-admin");
 // Firestore reference
 const db = admin.firestore();
 
-// Helper: compute active admin sessions based on lastLoginAt
-async function getActiveAdminSessions() {
-  const snapshot = await db
-    .collection('users')
-    .where('role', 'in', ['admin', 'Admin'])
-    .get();
-
-  const activeAdmins = [];
-
-  snapshot.forEach((doc) => {
-    const data = doc.data() || {};
-    const lastLoginAt = data.lastLoginAt;
-    if (!lastLoginAt) return;
-
-    let lastLoginMs = null;
-    if (typeof lastLoginAt === 'string') {
-      const parsed = Date.parse(lastLoginAt);
-      if (!Number.isNaN(parsed)) lastLoginMs = parsed;
-    } else if (lastLoginAt && typeof lastLoginAt.toDate === 'function') {
-      lastLoginMs = lastLoginAt.toDate().getTime();
-    }
-
-    if (!lastLoginMs) return;
-
-    activeAdmins.push({
-      id: doc.id,
-      uid: data.uid || null,
-      lastLoginAt: lastLoginMs,
-    });
-  });
-
-  // Sort newest first (most recent login first)
-  activeAdmins.sort((a, b) => b.lastLoginAt - a.lastLoginAt);
-  return activeAdmins;
-}
-
 // ===== REGISTER =====
 exports.register = async (req, res) => {
   const { uid, fullName, email, role, linkedStudents, parentId, studentId, fcmToken } = req.body;
@@ -129,31 +93,6 @@ exports.login = async (req, res) => {
     const userData = userDoc.data();
     const documentId = userDoc.id;
 
-    // If this is an admin, enforce max 3 active admin sessions BEFORE updating lastLoginAt
-    const role = String(userData.role || '').toLowerCase();
-    if (role === 'admin') {
-      const MAX_ACTIVE_ADMINS = 3;
-      const activeAdmins = await getActiveAdminSessions();
-      const alreadyActive = activeAdmins.some(
-        (adminUser) => adminUser.uid && String(adminUser.uid) === String(userData.uid || uid)
-      );
-
-      if (activeAdmins.length >= MAX_ACTIVE_ADMINS && !alreadyActive) {
-        console.warn('🚫 Admin login blocked in backend /login (limit reached):', {
-          uid,
-          documentId,
-          activeCount: activeAdmins.length,
-          max: MAX_ACTIVE_ADMINS,
-        });
-        return res.status(429).json({
-          message: `Admin login limit reached (${activeAdmins.length}/${MAX_ACTIVE_ADMINS}). Please log out another admin first.`,
-          currentCount: activeAdmins.length,
-          max: MAX_ACTIVE_ADMINS,
-          allowed: false,
-        });
-      }
-    }
-
     // Update FCM token and lastLoginAt if provided
     const now = new Date().toISOString();
     const updateData = {
@@ -206,75 +145,5 @@ exports.getProfile = async (req, res) => {
   } catch (err) {
     console.error("Get Profile Error:", err);
     res.status(500).json({ error: "Server error" });
-  }
-};
-
-// ===== ADMIN SESSION STATUS =====
-// Returns how many admins are currently considered "logged in" (active)
-// and whether the current admin is allowed to proceed based on a max of 3.
-exports.getAdminSessionStatus = async (req, res) => {
-  try {
-    const uid = req.user && req.user.uid ? String(req.user.uid) : null;
-    const role = req.user && req.user.role ? String(req.user.role).toLowerCase() : null;
-
-    if (!uid || role !== 'admin') {
-      return res.status(400).json({ message: 'Admin session status is only available for admin users.' });
-    }
-
-    const MAX_ACTIVE_ADMINS = 3;
-    const activeAdmins = await getActiveAdminSessions();
-
-    const currentIndex = activeAdmins.findIndex(
-      (adminUser) => adminUser.uid && String(adminUser.uid) === uid
-    );
-    const alreadyActive = currentIndex !== -1;
-
-    const allowed = activeAdmins.length < MAX_ACTIVE_ADMINS || alreadyActive;
-
-    const position = alreadyActive ? currentIndex + 1 : null;
-
-    if (!allowed && !alreadyActive) {
-      return res.status(429).json({
-        allowed: false,
-        alreadyActive: false,
-        currentCount: activeAdmins.length,
-        max: MAX_ACTIVE_ADMINS,
-        position: null,
-        message: `Admin login limit reached (${activeAdmins.length}/${MAX_ACTIVE_ADMINS}). Please log out another admin first.`,
-      });
-    }
-
-    // If allowed and not already marked active, update this admin's lastLoginAt now
-    if (!alreadyActive) {
-      try {
-        const usersRef = db.collection('users');
-        const q = usersRef.where('uid', '==', uid).limit(1);
-        const snap = await q.get();
-        if (!snap.empty) {
-          const docRef = snap.docs[0].ref;
-          await docRef.update({
-            lastLoginAt: new Date().toISOString(),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-        }
-      } catch (updateErr) {
-        console.warn('Failed to update lastLoginAt in getAdminSessionStatus (non-critical):', updateErr);
-      }
-    }
-
-    return res.json({
-      allowed: true,
-      alreadyActive,
-      currentCount: activeAdmins.length,
-      max: MAX_ACTIVE_ADMINS,
-      position,
-      // For debugging / display, show e.g. "2/3"
-      display: alreadyActive
-        ? `${Math.min(position || activeAdmins.length, MAX_ACTIVE_ADMINS)}/${MAX_ACTIVE_ADMINS}`
-        : `${Math.min(activeAdmins.length, MAX_ACTIVE_ADMINS)}/${MAX_ACTIVE_ADMINS}`,
-    });
-  } catch (err) {
-    console.error('Admin session status error:', err);
-    return res.status(500).json({ message: 'Server error while checking admin session status' });
   }
 };

@@ -20,12 +20,6 @@ if (!admin.apps.length) {
 /**
  * Firebase Authentication Middleware
  * Verifies Firebase ID token from Authorization header
- *
- * IMPORTANT for admin limit logic:
- * - If no user document is found by uid, we also check special docs:
- *   "Developer" and "Admin" in the users collection, matching by email.
- * - This ensures legacy Admin/Developer accounts (created by scripts)
- *   are still recognized as admin/developer even if they were missing uid.
  */
 module.exports = async function authMiddleware(req, res, next) {
   try {
@@ -43,48 +37,13 @@ module.exports = async function authMiddleware(req, res, next) {
     // Fetch user profile to determine role
     const db = admin.firestore();
     let role = 'student';
-
     try {
-      // First, try to find a standard user document by uid
       const users = await db.collection('users').where('uid', '==', decodedToken.uid).limit(1).get();
       if (!users.empty) {
-        const data = users.docs[0].data() || {};
-        if (data && typeof data.role === 'string') {
-          role = String(data.role).toLowerCase();
-        }
-      } else {
-        // No user by uid - check for special Admin / Developer docs
-        const email = String(decodedToken.email || '').toLowerCase();
-
-        // Check Developer doc
-        try {
-          const devSnap = await db.collection('users').doc('Developer').get();
-          if (devSnap.exists) {
-            const devData = devSnap.data() || {};
-            const devEmail = String(devData.email || devData.Email || '').toLowerCase();
-            if (devEmail && devEmail === email) {
-              role = 'developer';
-            }
-          }
-        } catch {}
-
-        // Check Admin doc if still not resolved
-        if (role === 'student') {
-          try {
-            const adminSnap = await db.collection('users').doc('Admin').get();
-            if (adminSnap.exists) {
-              const adminData = adminSnap.data() || {};
-              const adminEmail = String(adminData.email || adminData.Email || '').toLowerCase();
-              if (adminEmail && adminEmail === email) {
-                role = 'admin';
-              }
-            }
-          } catch {}
-        }
+        const data = users.docs[0].data();
+        if (data && typeof data.role === 'string') role = data.role.toLowerCase();
       }
-    } catch (lookupError) {
-      console.warn('authMiddleware user lookup error (non-critical):', lookupError?.message || lookupError);
-    }
+    } catch {}
 
     req.user = {
       uid: decodedToken.uid,

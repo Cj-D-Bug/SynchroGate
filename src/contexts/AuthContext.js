@@ -782,68 +782,6 @@ export const AuthProvider = ({ children }) => {
         timestamp: new Date().toISOString()
       });
 
-      // === BACKEND ENFORCEMENT: LIMIT ADMIN LOGINS TO 3 ===
-      if (expectedRole && expectedRole.toLowerCase() === 'admin') {
-        try {
-          const idToken = await firebaseUser.getIdToken();
-          const apiBase = BASE_URL.replace(/\/+$/, '');
-          const url = `${apiBase}/auth/admin-session-status`;
-          console.log('🔍 Checking admin session status at:', url);
-
-          const response = await fetch(url, {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${idToken}`,
-              'Content-Type': 'application/json',
-            },
-          });
-
-          const data = await response.json().catch(() => ({}));
-
-          if (!response.ok) {
-            if (response.status === 429 || data?.allowed === false) {
-              const currentCount = typeof data.currentCount === 'number' ? data.currentCount : 3;
-              const max = typeof data.max === 'number' ? data.max : 3;
-              const msg =
-                data?.message ||
-                `Admin login limit reached (${currentCount}/${max}). Please log out another admin first.`;
-              console.error('🚫 Admin login blocked by backend limit:', {
-                status: response.status,
-                currentCount,
-                max,
-              });
-              // Force logout from Firebase and local state
-              await signOut(auth);
-              setUser(null);
-              setRole(null);
-              try {
-                await AsyncStorage.removeItem("user");
-              } catch {}
-              throw new Error(msg);
-            } else {
-              console.warn('Admin session status check failed, response not ok:', {
-                status: response.status,
-                data,
-              });
-            }
-          } else {
-            // Log allowed status and display string like "1/3", "2/3", "3/3"
-            if (data && typeof data.currentCount === 'number' && typeof data.max === 'number') {
-              console.log(
-                `✅ Admin session allowed: ${data.currentCount}/${data.max} active admins`,
-                data.display ? `(display: ${data.display})` : ''
-              );
-            }
-          }
-        } catch (adminLimitError) {
-          console.error('Admin session limit check error:', adminLimitError);
-          // If this throws a user-facing Error above, it will be caught by outer catch
-          if (adminLimitError instanceof Error && /Admin login limit reached/.test(adminLimitError.message)) {
-            throw adminLimitError;
-          }
-        }
-      }
-
       console.log("User logged in successfully:", userData);
 
       setUser(userData);

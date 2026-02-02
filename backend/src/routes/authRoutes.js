@@ -25,11 +25,7 @@ router.post(
   authController.login
 );
 
-// Admin session status (used by mobile app to enforce max 3 admin logins)
-router.get(
-  "/admin-session-status",
-  authMiddleware,
-  authController.getAdminSessionStatus
-);
+// Protect this route with Firebase token verification
+// router.post("/refresh-token", authMiddleware, authController.refreshToken);
 
 module.exports = router;
