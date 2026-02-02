@@ -34,7 +34,7 @@ async function getActiveAdminSessions() {
     });
   });
 
-  // Sort newest first
+  // Sort newest first (most recent login first)
   activeAdmins.sort((a, b) => b.lastLoginAt - a.lastLoginAt);
   return activeAdmins;
 }
@@ -129,6 +129,31 @@ exports.login = async (req, res) => {
     const userData = userDoc.data();
     const documentId = userDoc.id;
 
+    // If this is an admin, enforce max 3 active admin sessions BEFORE updating lastLoginAt
+    const role = String(userData.role || '').toLowerCase();
+    if (role === 'admin') {
+      const MAX_ACTIVE_ADMINS = 3;
+      const activeAdmins = await getActiveAdminSessions();
+      const alreadyActive = activeAdmins.some(
+        (adminUser) => adminUser.uid && String(adminUser.uid) === String(userData.uid || uid)
+      );
+
+      if (activeAdmins.length >= MAX_ACTIVE_ADMINS && !alreadyActive) {
+        console.warn('🚫 Admin login blocked in backend /login (limit reached):', {
+          uid,
+          documentId,
+          activeCount: activeAdmins.length,
+          max: MAX_ACTIVE_ADMINS,
+        });
+        return res.status(429).json({
+          message: `Admin login limit reached (${activeAdmins.length}/${MAX_ACTIVE_ADMINS}). Please log out another admin first.`,
+          currentCount: activeAdmins.length,
+          max: MAX_ACTIVE_ADMINS,
+          allowed: false,
+        });
+      }
+    }
+
     // Update FCM token and lastLoginAt if provided
     const now = new Date().toISOString();
     const updateData = {
@@ -217,6 +242,24 @@ exports.getAdminSessionStatus = async (req, res) => {
         position: null,
         message: `Admin login limit reached (${activeAdmins.length}/${MAX_ACTIVE_ADMINS}). Please log out another admin first.`,
       });
+    }
+
+    // If allowed and not already marked active, update this admin's lastLoginAt now
+    if (!alreadyActive) {
+      try {
+        const usersRef = db.collection('users');
+        const q = usersRef.where('uid', '==', uid).limit(1);
+        const snap = await q.get();
+        if (!snap.empty) {
+          const docRef = snap.docs[0].ref;
+          await docRef.update({
+            lastLoginAt: new Date().toISOString(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+      } catch (updateErr) {
+        console.warn('Failed to update lastLoginAt in getAdminSessionStatus (non-critical):', updateErr);
+      }
     }
 
     return res.json({
