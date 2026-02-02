@@ -1567,18 +1567,18 @@ const StudentProfile = () => {
         isPendingVerification ? (
           <View style={styles.bottomButtonContainer}>
             <TouchableOpacity
-              style={[styles.bottomButton, styles.bottomSaveButton, (verifyingAccount || deletingAccount) && styles.bottomButtonDisabled]}
-              onPress={() => setVerifyConfirmVisible(true)}
-              disabled={verifyingAccount || deletingAccount}
-            >
-              <Text style={styles.bottomSaveButtonText}>Verify</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
               style={[styles.bottomButton, styles.bottomDeleteInlineButton, (deletingAccount || verifyingAccount) && styles.bottomButtonDisabled]}
               onPress={() => setDeleteConfirmVisible(true)}
               disabled={deletingAccount || verifyingAccount}
             >
               <Text style={styles.bottomDeleteInlineText}>Delete</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.bottomButton, styles.bottomSaveButton, (verifyingAccount || deletingAccount) && styles.bottomButtonDisabled]}
+              onPress={() => setVerifyConfirmVisible(true)}
+              disabled={verifyingAccount || deletingAccount}
+            >
+              <Text style={styles.bottomSaveButtonText}>Verify</Text>
             </TouchableOpacity>
           </View>
         ) : (
