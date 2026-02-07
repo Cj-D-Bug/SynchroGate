@@ -19,8 +19,7 @@ router.post(
 router.post(
   "/login",
   [
-    body("email").isEmail().withMessage("Valid email is required"),
-    body("password").notEmpty().withMessage("Password is required"),
+    body("idToken").notEmpty().withMessage("ID Token is required"),
   ],
   authController.login
 );
