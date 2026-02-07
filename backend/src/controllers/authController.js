@@ -77,46 +77,59 @@ exports.register = async (req, res) => {
 // Since Firebase client handles login, backend verifies ID token
 exports.login = async (req, res) => {
   try {
+    console.log('🔐 [LOGIN] ========== LOGIN REQUEST RECEIVED ==========');
     const { idToken, fcmToken } = req.body;
-    if (!idToken) return res.status(400).json({ message: "ID Token required" });
+    if (!idToken) {
+      console.log('❌ [LOGIN] Missing ID Token');
+      return res.status(400).json({ message: "ID Token required" });
+    }
 
     const decodedToken = await admin.auth().verifyIdToken(idToken);
     const uid = decodedToken.uid;
+    console.log(`🔐 [LOGIN] Firebase UID verified: ${uid}`);
 
     // Since we now use parent/student IDs as document names, we need to search by UID first
     const usersRef = db.collection("users");
     const q = usersRef.where("uid", "==", uid);
     const querySnapshot = await q.get();
 
-    if (querySnapshot.empty) return res.status(404).json({ message: "User not found" });
+    if (querySnapshot.empty) {
+      console.log(`❌ [LOGIN] User not found for UID: ${uid}`);
+      return res.status(404).json({ message: "User not found" });
+    }
 
     const userDoc = querySnapshot.docs[0];
     const userData = userDoc.data();
     const documentId = userDoc.id;
     const userRole = (userData.role || 'student').toLowerCase();
+    const fullName = userData.fullName || 'Unknown';
+    
+    console.log(`🔐 [LOGIN] User found - ID: ${documentId}, Role: ${userRole}, Name: ${fullName}`);
 
     // Get device ID from request
     const deviceId = sessionService.getDeviceId(req);
-    console.log(`🔍 Login attempt for user ${documentId} (role: ${userRole}) from device: ${deviceId.substring(0, 50)}...`);
+    console.log(`🔐 [LOGIN] Device ID: ${deviceId.substring(0, 80)}...`);
 
     // Check if there's an active session for this role (from a different user)
     const roleSessionCheck = await sessionService.checkActiveSessionByRole(userRole);
-    console.log(`🔍 Role session check for ${userRole}: hasActiveSession=${roleSessionCheck.hasActiveSession}, existingUserId=${roleSessionCheck.existingUserId}`);
+    console.log(`🔐 [LOGIN] Role session check (${userRole}): hasActiveSession=${roleSessionCheck.hasActiveSession}, existingUserId=${roleSessionCheck.existingUserId}`);
     
     if (roleSessionCheck.hasActiveSession && roleSessionCheck.existingUserId !== documentId) {
       // Another user with the same role is already logged in
-      console.log(`⚠️ Role ${userRole} already has an active session for user ${roleSessionCheck.existingUserId}. Invalidating to allow login for user ${documentId}`);
+      console.log(`⚠️ [LOGIN] Role ${userRole} already has an active session for user ${roleSessionCheck.existingUserId}. Invalidating to allow login for user ${documentId}`);
       await sessionService.invalidateSession(roleSessionCheck.existingUserId);
     }
 
     // Check if user has an active session on a different device
     const sessionCheck = await sessionService.checkActiveSession(documentId);
-    console.log(`🔍 User session check for ${documentId}: hasActiveSession=${sessionCheck.hasActiveSession}, existingDeviceId=${sessionCheck.existingDeviceId ? sessionCheck.existingDeviceId.substring(0, 50) + '...' : 'null'}, currentDeviceId=${deviceId.substring(0, 50)}...`);
+    const existingDeviceIdShort = sessionCheck.existingDeviceId ? sessionCheck.existingDeviceId.substring(0, 50) + '...' : 'null';
+    const currentDeviceIdShort = deviceId.substring(0, 50) + '...';
+    console.log(`🔐 [LOGIN] User session check: hasActiveSession=${sessionCheck.hasActiveSession}, existingDeviceId=${existingDeviceIdShort}, currentDeviceId=${currentDeviceIdShort}`);
     
     if (sessionCheck.hasActiveSession) {
       if (sessionCheck.existingDeviceId === deviceId) {
         // Same device - allow login and update session
-        console.log(`✅ User ${documentId} logging in from same device. Updating session.`);
+        console.log(`✅ [LOGIN] User ${documentId} (${userRole}) logging in from SAME device. Updating session.`);
       } else {
         // User is trying to login from a different device
         // Reject the login attempt and return error
@@ -139,7 +152,16 @@ exports.login = async (req, res) => {
           console.warn('Error formatting login time:', timeError);
         }
         
-        console.log(`❌ User ${documentId} attempting to login from NEW device. REJECTING - active session exists on device ${sessionCheck.existingDeviceId?.substring(0, 50)}... since ${loginTimeFormatted}`);
+        console.log(`❌ [LOGIN FAILED] ========== ACCOUNT IN ACTIVE SESSION ==========`);
+        console.log(`❌ [LOGIN FAILED] Student ID: ${documentId}`);
+        console.log(`❌ [LOGIN FAILED] Name: ${fullName}`);
+        console.log(`❌ [LOGIN FAILED] Role: ${userRole}`);
+        console.log(`❌ [LOGIN FAILED] Reason: Account is currently in session on another device`);
+        console.log(`❌ [LOGIN FAILED] Active session device: ${sessionCheck.existingDeviceId?.substring(0, 80)}...`);
+        console.log(`❌ [LOGIN FAILED] Active session since: ${loginTimeFormatted}`);
+        console.log(`❌ [LOGIN FAILED] Attempted login from device: ${deviceId.substring(0, 80)}...`);
+        console.log(`❌ [LOGIN FAILED] ================================================`);
+        
         return res.status(403).json({ 
           message: "Account is currently in session on another device",
           code: "SESSION_ACTIVE",
@@ -147,7 +169,7 @@ exports.login = async (req, res) => {
         });
       }
     } else {
-      console.log(`✅ No existing session found for user ${documentId}. Allowing new login.`);
+      console.log(`✅ [LOGIN] No existing session found for user ${documentId}. Allowing new login.`);
     }
 
     // Update FCM token and lastLoginAt if provided
@@ -171,19 +193,26 @@ exports.login = async (req, res) => {
 
     // Create or update session for this device (include role)
     await sessionService.createSession(documentId, deviceId, userRole);
-    console.log(`✅ Session created/updated for user ${documentId} (role: ${userRole}) on device ${deviceId.substring(0, 50)}...`);
+    console.log(`✅ [LOGIN] Session created/updated for user ${documentId} (role: ${userRole}) on device ${deviceId.substring(0, 50)}...`);
 
     // Get updated user data
     const updatedUserDoc = await userDocRef.get();
     const updatedUserData = updatedUserDoc.data();
 
-    console.log(`✅ Login successful for user ${documentId} (role: ${userRole})`);
+    console.log(`✅ [LOGIN SUCCESS] ========== USER LOGGED IN ==========`);
+    console.log(`✅ [LOGIN SUCCESS] Student ID: ${documentId}`);
+    console.log(`✅ [LOGIN SUCCESS] Name: ${fullName}`);
+    console.log(`✅ [LOGIN SUCCESS] Role: ${userRole}`);
+    console.log(`✅ [LOGIN SUCCESS] Device: ${deviceId.substring(0, 80)}...`);
+    console.log(`✅ [LOGIN SUCCESS] ====================================`);
+    
     res.json({
       message: "Login successful",
       user: updatedUserData,
     });
   } catch (err) {
-    console.error("Login Error:", err);
+    console.error("❌ [LOGIN ERROR]:", err);
+    console.error("❌ [LOGIN ERROR] Stack:", err.stack);
     res.status(500).json({ error: "Server error" });
   }
 };
@@ -191,7 +220,9 @@ exports.login = async (req, res) => {
 // ===== LOGOUT =====
 exports.logout = async (req, res) => {
   try {
+    console.log('🔓 [LOGOUT] ========== LOGOUT REQUEST RECEIVED ==========');
     const uid = req.user.uid; // Comes from authMiddleware
+    console.log(`🔓 [LOGOUT] Firebase UID: ${uid}`);
     
     // Since we now use parent/student IDs as document names, we need to search by UID first
     const usersRef = db.collection("users");
@@ -199,18 +230,30 @@ exports.logout = async (req, res) => {
     const querySnapshot = await q.get();
 
     if (querySnapshot.empty) {
+      console.log(`❌ [LOGOUT] User not found for UID: ${uid}`);
       return res.status(404).json({ message: "User not found" });
     }
 
     const userDoc = querySnapshot.docs[0];
+    const userData = userDoc.data();
     const documentId = userDoc.id;
+    const userRole = (userData.role || 'student').toLowerCase();
+    const fullName = userData.fullName || 'Unknown';
+    
+    console.log(`🔓 [LOGOUT] User found - ID: ${documentId}, Role: ${userRole}, Name: ${fullName}`);
 
     // Delete the session
     await sessionService.deleteSession(documentId);
+    
+    console.log(`✅ [LOGOUT SUCCESS] ========== USER LOGGED OUT ==========`);
+    console.log(`✅ [LOGOUT SUCCESS] Student ID: ${documentId}`);
+    console.log(`✅ [LOGOUT SUCCESS] Name: ${fullName}`);
+    console.log(`✅ [LOGOUT SUCCESS] Role: ${userRole}`);
+    console.log(`✅ [LOGOUT SUCCESS] =====================================`);
 
     res.json({ message: "Logout successful" });
   } catch (err) {
-    console.error("Logout Error:", err);
+    console.error("❌ [LOGOUT ERROR]:", err);
     res.status(500).json({ error: "Server error" });
   }
 };

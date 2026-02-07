@@ -50,12 +50,9 @@ const getDeviceId = (req) => {
  */
 const checkActiveSession = async (userId) => {
   try {
-    console.log(`🔍 [checkActiveSession] Checking session for user: ${userId}`);
-    
     // Check in-memory cache first
     const cachedSession = activeSessions.get(userId);
     if (cachedSession) {
-      console.log(`🔍 [checkActiveSession] Found cached session for ${userId}, verifying in Firestore...`);
       // Verify session still exists in Firestore
       const sessionDoc = await firestore
         .collection(SESSIONS_COLLECTION)
@@ -69,8 +66,6 @@ const checkActiveSession = async (userId) => {
         const sessionTimeout = 24 * 60 * 60 * 1000; // 24 hours
         const isExpired = Date.now() - lastActivity.getTime() > sessionTimeout;
         
-        console.log(`🔍 [checkActiveSession] Session exists in Firestore. Device: ${sessionData.deviceId?.substring(0, 50)}..., Expired: ${isExpired}`);
-        
         if (!isExpired) {
           return {
             hasActiveSession: true,
@@ -81,18 +76,15 @@ const checkActiveSession = async (userId) => {
           };
         } else {
           // Session expired, remove from cache
-          console.log(`⚠️ [checkActiveSession] Session expired for ${userId}, removing from cache`);
           activeSessions.delete(userId);
         }
       } else {
         // Session doesn't exist in Firestore, remove from cache
-        console.log(`⚠️ [checkActiveSession] Session not found in Firestore for ${userId}, removing from cache`);
         activeSessions.delete(userId);
       }
     }
 
     // Check Firestore
-    console.log(`🔍 [checkActiveSession] Checking Firestore for user: ${userId}`);
     const sessionDoc = await firestore
       .collection(SESSIONS_COLLECTION)
       .doc(userId)
@@ -103,8 +95,6 @@ const checkActiveSession = async (userId) => {
       const lastActivity = sessionData.lastActivity?.toDate?.() || new Date(sessionData.lastActivity);
       const sessionTimeout = 24 * 60 * 60 * 1000; // 24 hours
       const isExpired = Date.now() - lastActivity.getTime() > sessionTimeout;
-
-      console.log(`🔍 [checkActiveSession] Found session in Firestore. Device: ${sessionData.deviceId?.substring(0, 50)}..., Expired: ${isExpired}`);
 
       if (!isExpired) {
         // Update cache
@@ -123,11 +113,8 @@ const checkActiveSession = async (userId) => {
         };
       } else {
         // Expired session, delete it
-        console.log(`⚠️ [checkActiveSession] Deleting expired session for ${userId}`);
         await firestore.collection(SESSIONS_COLLECTION).doc(userId).delete();
       }
-    } else {
-      console.log(`✅ [checkActiveSession] No session found in Firestore for ${userId}`);
     }
 
     return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null };
