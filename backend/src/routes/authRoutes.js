@@ -5,6 +5,12 @@ const authMiddleware = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
+// Log all requests to auth routes
+router.use((req, res, next) => {
+  console.log(`📥 [AUTH ROUTE] ${req.method} ${req.path}`);
+  next();
+});
+
 router.post(
   "/register",
   [

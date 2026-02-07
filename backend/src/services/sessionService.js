@@ -322,6 +322,10 @@ const initializeUserLoginListener = () => {
   
   userLoginListener = usersCollection.onSnapshot(async (snapshot) => {
     const changes = snapshot.docChanges();
+    
+    if (changes.length > 0) {
+      console.log(`🔍 [LISTENER] Detected ${changes.length} document change(s)`);
+    }
 
     for (const change of changes) {
       try {
@@ -329,14 +333,59 @@ const initializeUserLoginListener = () => {
           const userData = change.doc.data();
           const userId = change.doc.id;
           const newLastLoginAt = userData.lastLoginAt;
-          const newLastLoginAtValue = newLastLoginAt ? (typeof newLastLoginAt === 'string' ? newLastLoginAt : newLastLoginAt.toISOString?.() || String(newLastLoginAt)) : null;
+          
+          // Convert to comparable string format
+          let newLastLoginAtValue = null;
+          if (newLastLoginAt) {
+            if (typeof newLastLoginAt === 'string') {
+              newLastLoginAtValue = newLastLoginAt;
+            } else if (newLastLoginAt.toDate && typeof newLastLoginAt.toDate === 'function') {
+              newLastLoginAtValue = newLastLoginAt.toDate().toISOString();
+            } else if (newLastLoginAt._seconds) {
+              newLastLoginAtValue = new Date(newLastLoginAt._seconds * 1000).toISOString();
+            } else {
+              newLastLoginAtValue = String(newLastLoginAt);
+            }
+          }
           
           // Safely check metadata - it may be undefined in some Firestore versions
           const hasPendingWrites = change.doc.metadata?.hasPendingWrites ?? false;
-          const oldLastLoginAt = hasPendingWrites 
-            ? null 
-            : (await change.doc.ref.get({ source: 'cache' })).data()?.lastLoginAt;
-          const oldLastLoginAtValue = oldLastLoginAt ? (typeof oldLastLoginAt === 'string' ? oldLastLoginAt : oldLastLoginAt.toISOString?.() || String(oldLastLoginAt)) : null;
+          let oldLastLoginAt = null;
+          let oldLastLoginAtValue = null;
+          
+          if (!hasPendingWrites) {
+            try {
+              const cachedDoc = await change.doc.ref.get({ source: 'cache' });
+              if (cachedDoc.exists) {
+                oldLastLoginAt = cachedDoc.data()?.lastLoginAt;
+              }
+            } catch (cacheError) {
+              // Cache might not be available, try server
+              try {
+                const serverDoc = await change.doc.ref.get({ source: 'server' });
+                if (serverDoc.exists) {
+                  oldLastLoginAt = serverDoc.data()?.lastLoginAt;
+                }
+              } catch (serverError) {
+                // Ignore - we'll just compare with null
+              }
+            }
+          }
+          
+          if (oldLastLoginAt) {
+            if (typeof oldLastLoginAt === 'string') {
+              oldLastLoginAtValue = oldLastLoginAt;
+            } else if (oldLastLoginAt.toDate && typeof oldLastLoginAt.toDate === 'function') {
+              oldLastLoginAtValue = oldLastLoginAt.toDate().toISOString();
+            } else if (oldLastLoginAt._seconds) {
+              oldLastLoginAtValue = new Date(oldLastLoginAt._seconds * 1000).toISOString();
+            } else {
+              oldLastLoginAtValue = String(oldLastLoginAt);
+            }
+          }
+          
+          // Debug logging
+          console.log(`🔍 [LISTENER] User ${userId}: newLastLoginAt=${newLastLoginAtValue}, oldLastLoginAt=${oldLastLoginAtValue}`);
 
           // Check if lastLoginAt was updated (user logged in)
           if (newLastLoginAtValue && newLastLoginAtValue !== oldLastLoginAtValue) {
