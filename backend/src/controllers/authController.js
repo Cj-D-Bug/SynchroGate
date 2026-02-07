@@ -152,15 +152,14 @@ exports.login = async (req, res) => {
           console.warn('Error formatting login time:', timeError);
         }
         
-        console.log(`❌ [LOGIN FAILED] ========== ACCOUNT IN ACTIVE SESSION ==========`);
-        console.log(`❌ [LOGIN FAILED] Student ID: ${documentId}`);
-        console.log(`❌ [LOGIN FAILED] Name: ${fullName}`);
-        console.log(`❌ [LOGIN FAILED] Role: ${userRole}`);
-        console.log(`❌ [LOGIN FAILED] Reason: Account is currently in session on another device`);
-        console.log(`❌ [LOGIN FAILED] Active session device: ${sessionCheck.existingDeviceId?.substring(0, 80)}...`);
-        console.log(`❌ [LOGIN FAILED] Active session since: ${loginTimeFormatted}`);
-        console.log(`❌ [LOGIN FAILED] Attempted login from device: ${deviceId.substring(0, 80)}...`);
-        console.log(`❌ [LOGIN FAILED] ================================================`);
+        console.log(`❌ ========== ACCOUNT ALREADY IN ACTIVE SESSION ==========`);
+        console.log(`❌ Student ID: ${documentId}`);
+        console.log(`❌ Name: ${fullName}`);
+        console.log(`❌ Role: ${userRole}`);
+        console.log(`❌ Active session device: ${sessionCheck.existingDeviceId?.substring(0, 60)}...`);
+        console.log(`❌ Active session since: ${loginTimeFormatted}`);
+        console.log(`❌ Attempted login from device: ${deviceId.substring(0, 60)}...`);
+        console.log(`❌ =======================================================`);
         
         return res.status(403).json({ 
           message: "Account is currently in session on another device",
@@ -199,12 +198,12 @@ exports.login = async (req, res) => {
     const updatedUserDoc = await userDocRef.get();
     const updatedUserData = updatedUserDoc.data();
 
-    console.log(`✅ [LOGIN SUCCESS] ========== USER LOGGED IN ==========`);
-    console.log(`✅ [LOGIN SUCCESS] Student ID: ${documentId}`);
-    console.log(`✅ [LOGIN SUCCESS] Name: ${fullName}`);
-    console.log(`✅ [LOGIN SUCCESS] Role: ${userRole}`);
-    console.log(`✅ [LOGIN SUCCESS] Device: ${deviceId.substring(0, 80)}...`);
-    console.log(`✅ [LOGIN SUCCESS] ====================================`);
+    console.log(`✅ ========== LOGGED IN SUCCESSFUL ==========`);
+    console.log(`✅ Student ID: ${documentId}`);
+    console.log(`✅ Name: ${fullName}`);
+    console.log(`✅ Role: ${userRole}`);
+    console.log(`✅ Device: ${deviceId.substring(0, 60)}...`);
+    console.log(`✅ ==========================================`);
     
     res.json({
       message: "Login successful",
@@ -245,11 +244,11 @@ exports.logout = async (req, res) => {
     // Delete the session
     await sessionService.deleteSession(documentId);
     
-    console.log(`✅ [LOGOUT SUCCESS] ========== USER LOGGED OUT ==========`);
-    console.log(`✅ [LOGOUT SUCCESS] Student ID: ${documentId}`);
-    console.log(`✅ [LOGOUT SUCCESS] Name: ${fullName}`);
-    console.log(`✅ [LOGOUT SUCCESS] Role: ${userRole}`);
-    console.log(`✅ [LOGOUT SUCCESS] =====================================`);
+    console.log(`✅ ========== LOGGED OUT SUCCESSFULLY ==========`);
+    console.log(`✅ Student ID: ${documentId}`);
+    console.log(`✅ Name: ${fullName}`);
+    console.log(`✅ Role: ${userRole}`);
+    console.log(`✅ =============================================`);
 
     res.json({ message: "Logout successful" });
   } catch (err) {

@@ -317,6 +317,9 @@ const initializeUserLoginListener = () => {
 
   const usersCollection = firestore.collection('users');
 
+  // Track recent login events to prevent duplicate logs
+  const recentLoginEvents = new Map(); // userId -> timestamp
+  
   userLoginListener = usersCollection.onSnapshot(async (snapshot) => {
     const changes = snapshot.docChanges();
 
@@ -326,42 +329,72 @@ const initializeUserLoginListener = () => {
           const userData = change.doc.data();
           const userId = change.doc.id;
           const newLastLoginAt = userData.lastLoginAt;
-          
-          console.log(`📋 [LISTENER] Processing modified for ${userData.role || 'user'} document: ${userId}`);
+          const newLastLoginAtValue = newLastLoginAt ? (typeof newLastLoginAt === 'string' ? newLastLoginAt : newLastLoginAt.toISOString?.() || String(newLastLoginAt)) : null;
           
           // Safely check metadata - it may be undefined in some Firestore versions
           const hasPendingWrites = change.doc.metadata?.hasPendingWrites ?? false;
           const oldLastLoginAt = hasPendingWrites 
             ? null 
             : (await change.doc.ref.get({ source: 'cache' })).data()?.lastLoginAt;
+          const oldLastLoginAtValue = oldLastLoginAt ? (typeof oldLastLoginAt === 'string' ? oldLastLoginAt : oldLastLoginAt.toISOString?.() || String(oldLastLoginAt)) : null;
 
           // Check if lastLoginAt was updated (user logged in)
-          if (newLastLoginAt && newLastLoginAt !== oldLastLoginAt) {
-            const userRole = userData.role?.toLowerCase() || 'student';
-            const fullName = userData.fullName || userData.firstName + ' ' + userData.lastName || 'Unknown';
+          if (newLastLoginAtValue && newLastLoginAtValue !== oldLastLoginAtValue) {
+            // Prevent duplicate logs for the same login event (within 5 seconds)
+            const now = Date.now();
+            const lastLogged = recentLoginEvents.get(userId);
+            if (lastLogged && (now - lastLogged) < 5000) {
+              continue; // Skip duplicate log
+            }
+            recentLoginEvents.set(userId, now);
             
-            console.log(`🔐 [LISTENER] ========== DETECTED LOGIN EVENT ==========`);
-            console.log(`🔐 [LISTENER] Student ID: ${userId}`);
-            console.log(`🔐 [LISTENER] Name: ${fullName}`);
-            console.log(`🔐 [LISTENER] Role: ${userRole}`);
-            console.log(`🔐 [LISTENER] Login timestamp: ${newLastLoginAt}`);
+            // Clean up old entries (older than 10 seconds)
+            for (const [uid, timestamp] of recentLoginEvents.entries()) {
+              if (now - timestamp > 10000) {
+                recentLoginEvents.delete(uid);
+              }
+            }
+            
+            const userRole = userData.role?.toLowerCase() || 'student';
+            const fullName = userData.fullName || (userData.firstName && userData.lastName ? `${userData.firstName} ${userData.lastName}` : userData.firstName || userData.lastName || 'Unknown');
 
             // Check if there's an existing active session
             const sessionCheck = await checkActiveSession(userId);
             
             if (sessionCheck.hasActiveSession) {
-              // There's an active session - this shouldn't happen if backend login endpoint is working
-              // But if frontend bypasses it, we need to handle it here
-              console.log(`⚠️ [LISTENER] User ${userId} has existing active session on device ${sessionCheck.existingDeviceId?.substring(0, 50)}...`);
-              console.log(`⚠️ [LISTENER] This login may have bypassed backend validation`);
-              console.log(`⚠️ [LISTENER] Note: Backend login endpoint should prevent this`);
-              
-              // We can't easily revert the lastLoginAt change here, but we log it
-              // The backend login endpoint should be the primary enforcement point
+              // Account already in active session
+              console.log(`❌ ========== ACCOUNT ALREADY IN ACTIVE SESSION ==========`);
+              console.log(`❌ Student ID: ${userId}`);
+              console.log(`❌ Name: ${fullName}`);
+              console.log(`❌ Role: ${userRole}`);
+              console.log(`❌ Active session device: ${sessionCheck.existingDeviceId?.substring(0, 60)}...`);
+              console.log(`❌ =======================================================`);
             } else {
-              console.log(`✅ [LISTENER] No existing session found - new login allowed`);
+              // Successful login
+              console.log(`✅ ========== LOGGED IN SUCCESSFUL ==========`);
+              console.log(`✅ Student ID: ${userId}`);
+              console.log(`✅ Name: ${fullName}`);
+              console.log(`✅ Role: ${userRole}`);
+              console.log(`✅ ==========================================`);
             }
-            console.log(`🔐 [LISTENER] ===========================================`);
+          } else if (!newLastLoginAtValue && oldLastLoginAtValue) {
+            // lastLoginAt was cleared (user logged out)
+            const userRole = userData.role?.toLowerCase() || 'student';
+            const fullName = userData.fullName || (userData.firstName && userData.lastName ? `${userData.firstName} ${userData.lastName}` : userData.firstName || userData.lastName || 'Unknown');
+            
+            // Prevent duplicate logs
+            const now = Date.now();
+            const lastLogged = recentLoginEvents.get(`${userId}_logout`);
+            if (lastLogged && (now - lastLogged) < 5000) {
+              continue;
+            }
+            recentLoginEvents.set(`${userId}_logout`, now);
+            
+            console.log(`✅ ========== LOGGED OUT SUCCESSFULLY ==========`);
+            console.log(`✅ Student ID: ${userId}`);
+            console.log(`✅ Name: ${fullName}`);
+            console.log(`✅ Role: ${userRole}`);
+            console.log(`✅ =============================================`);
           }
         }
       } catch (error) {
