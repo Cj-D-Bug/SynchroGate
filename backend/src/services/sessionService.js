@@ -327,6 +327,8 @@ const initializeUserLoginListener = () => {
           const userId = change.doc.id;
           const newLastLoginAt = userData.lastLoginAt;
           
+          console.log(`📋 [LISTENER] Processing modified for ${userData.role || 'user'} document: ${userId}`);
+          
           // Safely check metadata - it may be undefined in some Firestore versions
           const hasPendingWrites = change.doc.metadata?.hasPendingWrites ?? false;
           const oldLastLoginAt = hasPendingWrites 
@@ -335,17 +337,31 @@ const initializeUserLoginListener = () => {
 
           // Check if lastLoginAt was updated (user logged in)
           if (newLastLoginAt && newLastLoginAt !== oldLastLoginAt) {
-            console.log(`🔍 Detected login event for user ${userId}`);
+            const userRole = userData.role?.toLowerCase() || 'student';
+            const fullName = userData.fullName || userData.firstName + ' ' + userData.lastName || 'Unknown';
+            
+            console.log(`🔐 [LISTENER] ========== DETECTED LOGIN EVENT ==========`);
+            console.log(`🔐 [LISTENER] Student ID: ${userId}`);
+            console.log(`🔐 [LISTENER] Name: ${fullName}`);
+            console.log(`🔐 [LISTENER] Role: ${userRole}`);
+            console.log(`🔐 [LISTENER] Login timestamp: ${newLastLoginAt}`);
 
             // Check if there's an existing active session
             const sessionCheck = await checkActiveSession(userId);
             
             if (sessionCheck.hasActiveSession) {
-              // There's an active session, but we allow the new login
-              // The old session will be invalidated when the new session is created
-              // This is handled in the login controller
-              console.log(`⚠️ User ${userId} has existing session on device ${sessionCheck.existingDeviceId}, will be invalidated on new login`);
+              // There's an active session - this shouldn't happen if backend login endpoint is working
+              // But if frontend bypasses it, we need to handle it here
+              console.log(`⚠️ [LISTENER] User ${userId} has existing active session on device ${sessionCheck.existingDeviceId?.substring(0, 50)}...`);
+              console.log(`⚠️ [LISTENER] This login may have bypassed backend validation`);
+              console.log(`⚠️ [LISTENER] Note: Backend login endpoint should prevent this`);
+              
+              // We can't easily revert the lastLoginAt change here, but we log it
+              // The backend login endpoint should be the primary enforcement point
+            } else {
+              console.log(`✅ [LISTENER] No existing session found - new login allowed`);
             }
+            console.log(`🔐 [LISTENER] ===========================================`);
           }
         }
       } catch (error) {
