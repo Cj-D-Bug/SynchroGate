@@ -97,9 +97,11 @@ exports.login = async (req, res) => {
 
     // Get device ID from request
     const deviceId = sessionService.getDeviceId(req);
+    console.log(`🔍 Login attempt for user ${documentId} (role: ${userRole}) from device: ${deviceId.substring(0, 50)}...`);
 
     // Check if there's an active session for this role (from a different user)
     const roleSessionCheck = await sessionService.checkActiveSessionByRole(userRole);
+    console.log(`🔍 Role session check for ${userRole}: hasActiveSession=${roleSessionCheck.hasActiveSession}, existingUserId=${roleSessionCheck.existingUserId}`);
     
     if (roleSessionCheck.hasActiveSession && roleSessionCheck.existingUserId !== documentId) {
       // Another user with the same role is already logged in
@@ -109,35 +111,43 @@ exports.login = async (req, res) => {
 
     // Check if user has an active session on a different device
     const sessionCheck = await sessionService.checkActiveSession(documentId);
+    console.log(`🔍 User session check for ${documentId}: hasActiveSession=${sessionCheck.hasActiveSession}, existingDeviceId=${sessionCheck.existingDeviceId ? sessionCheck.existingDeviceId.substring(0, 50) + '...' : 'null'}, currentDeviceId=${deviceId.substring(0, 50)}...`);
     
-    if (sessionCheck.hasActiveSession && sessionCheck.existingDeviceId !== deviceId) {
-      // User is trying to login from a different device
-      // Reject the login attempt and return error
-      let loginTimeFormatted = 'unknown time';
-      try {
-        const loginTime = sessionCheck.loginTime;
-        if (loginTime) {
-          // Handle Firestore Timestamp
-          if (loginTime.toDate && typeof loginTime.toDate === 'function') {
-            loginTimeFormatted = loginTime.toDate().toLocaleString();
-          } else if (loginTime._seconds) {
-            // Firestore Timestamp with _seconds property
-            loginTimeFormatted = new Date(loginTime._seconds * 1000).toLocaleString();
-          } else {
-            // Regular date or ISO string
-            loginTimeFormatted = new Date(loginTime).toLocaleString();
+    if (sessionCheck.hasActiveSession) {
+      if (sessionCheck.existingDeviceId === deviceId) {
+        // Same device - allow login and update session
+        console.log(`✅ User ${documentId} logging in from same device. Updating session.`);
+      } else {
+        // User is trying to login from a different device
+        // Reject the login attempt and return error
+        let loginTimeFormatted = 'unknown time';
+        try {
+          const loginTime = sessionCheck.loginTime;
+          if (loginTime) {
+            // Handle Firestore Timestamp
+            if (loginTime.toDate && typeof loginTime.toDate === 'function') {
+              loginTimeFormatted = loginTime.toDate().toLocaleString();
+            } else if (loginTime._seconds) {
+              // Firestore Timestamp with _seconds property
+              loginTimeFormatted = new Date(loginTime._seconds * 1000).toLocaleString();
+            } else {
+              // Regular date or ISO string
+              loginTimeFormatted = new Date(loginTime).toLocaleString();
+            }
           }
+        } catch (timeError) {
+          console.warn('Error formatting login time:', timeError);
         }
-      } catch (timeError) {
-        console.warn('Error formatting login time:', timeError);
+        
+        console.log(`❌ User ${documentId} attempting to login from NEW device. REJECTING - active session exists on device ${sessionCheck.existingDeviceId?.substring(0, 50)}... since ${loginTimeFormatted}`);
+        return res.status(403).json({ 
+          message: "Account is currently in session on another device",
+          code: "SESSION_ACTIVE",
+          loginTime: loginTimeFormatted
+        });
       }
-      
-      console.log(`⚠️ User ${documentId} attempting to login from new device. Rejecting login - active session exists on device ${sessionCheck.existingDeviceId} since ${loginTimeFormatted}`);
-      return res.status(403).json({ 
-        message: "Account is currently in session on another device",
-        code: "SESSION_ACTIVE",
-        loginTime: loginTimeFormatted
-      });
+    } else {
+      console.log(`✅ No existing session found for user ${documentId}. Allowing new login.`);
     }
 
     // Update FCM token and lastLoginAt if provided
@@ -161,11 +171,13 @@ exports.login = async (req, res) => {
 
     // Create or update session for this device (include role)
     await sessionService.createSession(documentId, deviceId, userRole);
+    console.log(`✅ Session created/updated for user ${documentId} (role: ${userRole}) on device ${deviceId.substring(0, 50)}...`);
 
     // Get updated user data
     const updatedUserDoc = await userDocRef.get();
     const updatedUserData = updatedUserDoc.data();
 
+    console.log(`✅ Login successful for user ${documentId} (role: ${userRole})`);
     res.json({
       message: "Login successful",
       user: updatedUserData,

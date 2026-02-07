@@ -14,7 +14,25 @@ const SESSIONS_COLLECTION = 'user_sessions';
  */
 const getDeviceId = (req) => {
   const userAgent = req.headers['user-agent'] || 'unknown';
-  const ip = req.ip || req.connection?.remoteAddress || req.socket?.remoteAddress || 'unknown';
+  // Try to get real IP (check x-forwarded-for for proxies, x-real-ip, then fallback)
+  const forwardedFor = req.headers['x-forwarded-for'];
+  const realIp = req.headers['x-real-ip'];
+  let ip = forwardedFor ? forwardedFor.split(',')[0].trim() : (realIp || req.ip || req.connection?.remoteAddress || req.socket?.remoteAddress || 'unknown');
+  
+  // For localhost, try to get more unique identifiers
+  if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip.includes('localhost')) {
+    // Use a combination of headers that might differ between devices
+    const acceptLanguage = req.headers['accept-language'] || 'unknown';
+    const acceptEncoding = req.headers['accept-encoding'] || 'unknown';
+    const acceptCharset = req.headers['accept-charset'] || 'unknown';
+    const secChUa = req.headers['sec-ch-ua'] || 'unknown';
+    const secChUaPlatform = req.headers['sec-ch-ua-platform'] || 'unknown';
+    
+    // Create a more unique fingerprint for localhost devices
+    const deviceFingerprint = `localhost_${userAgent.substring(0, 100)}_${acceptLanguage.substring(0, 50)}_${acceptEncoding.substring(0, 30)}_${acceptCharset.substring(0, 20)}_${secChUa.substring(0, 50)}_${secChUaPlatform.substring(0, 30)}`;
+    return deviceFingerprint.replace(/[^a-zA-Z0-9_]/g, '_').substring(0, 200);
+  }
+  
   const acceptLanguage = req.headers['accept-language'] || 'unknown';
   const acceptEncoding = req.headers['accept-encoding'] || 'unknown';
   
@@ -32,9 +50,12 @@ const getDeviceId = (req) => {
  */
 const checkActiveSession = async (userId) => {
   try {
+    console.log(`🔍 [checkActiveSession] Checking session for user: ${userId}`);
+    
     // Check in-memory cache first
     const cachedSession = activeSessions.get(userId);
     if (cachedSession) {
+      console.log(`🔍 [checkActiveSession] Found cached session for ${userId}, verifying in Firestore...`);
       // Verify session still exists in Firestore
       const sessionDoc = await firestore
         .collection(SESSIONS_COLLECTION)
@@ -48,6 +69,8 @@ const checkActiveSession = async (userId) => {
         const sessionTimeout = 24 * 60 * 60 * 1000; // 24 hours
         const isExpired = Date.now() - lastActivity.getTime() > sessionTimeout;
         
+        console.log(`🔍 [checkActiveSession] Session exists in Firestore. Device: ${sessionData.deviceId?.substring(0, 50)}..., Expired: ${isExpired}`);
+        
         if (!isExpired) {
           return {
             hasActiveSession: true,
@@ -58,15 +81,18 @@ const checkActiveSession = async (userId) => {
           };
         } else {
           // Session expired, remove from cache
+          console.log(`⚠️ [checkActiveSession] Session expired for ${userId}, removing from cache`);
           activeSessions.delete(userId);
         }
       } else {
         // Session doesn't exist in Firestore, remove from cache
+        console.log(`⚠️ [checkActiveSession] Session not found in Firestore for ${userId}, removing from cache`);
         activeSessions.delete(userId);
       }
     }
 
     // Check Firestore
+    console.log(`🔍 [checkActiveSession] Checking Firestore for user: ${userId}`);
     const sessionDoc = await firestore
       .collection(SESSIONS_COLLECTION)
       .doc(userId)
@@ -77,6 +103,8 @@ const checkActiveSession = async (userId) => {
       const lastActivity = sessionData.lastActivity?.toDate?.() || new Date(sessionData.lastActivity);
       const sessionTimeout = 24 * 60 * 60 * 1000; // 24 hours
       const isExpired = Date.now() - lastActivity.getTime() > sessionTimeout;
+
+      console.log(`🔍 [checkActiveSession] Found session in Firestore. Device: ${sessionData.deviceId?.substring(0, 50)}..., Expired: ${isExpired}`);
 
       if (!isExpired) {
         // Update cache
@@ -95,8 +123,11 @@ const checkActiveSession = async (userId) => {
         };
       } else {
         // Expired session, delete it
+        console.log(`⚠️ [checkActiveSession] Deleting expired session for ${userId}`);
         await firestore.collection(SESSIONS_COLLECTION).doc(userId).delete();
       }
+    } else {
+      console.log(`✅ [checkActiveSession] No session found in Firestore for ${userId}`);
     }
 
     return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null };

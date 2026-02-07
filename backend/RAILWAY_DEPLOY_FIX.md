@@ -120,3 +120,4 @@ git push
 3. **Test login** from another device - first device should be logged out
 4. **Verify session cleanup** is working (check logs after 6 hours)
 
+
