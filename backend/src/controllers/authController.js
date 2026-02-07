@@ -93,9 +93,19 @@ exports.login = async (req, res) => {
     const userDoc = querySnapshot.docs[0];
     const userData = userDoc.data();
     const documentId = userDoc.id;
+    const userRole = (userData.role || 'student').toLowerCase();
 
     // Get device ID from request
     const deviceId = sessionService.getDeviceId(req);
+
+    // Check if there's an active session for this role (from a different user)
+    const roleSessionCheck = await sessionService.checkActiveSessionByRole(userRole);
+    
+    if (roleSessionCheck.hasActiveSession && roleSessionCheck.existingUserId !== documentId) {
+      // Another user with the same role is already logged in
+      console.log(`⚠️ Role ${userRole} already has an active session for user ${roleSessionCheck.existingUserId}. Invalidating to allow login for user ${documentId}`);
+      await sessionService.invalidateSession(roleSessionCheck.existingUserId);
+    }
 
     // Check if user has an active session on a different device
     const sessionCheck = await sessionService.checkActiveSession(documentId);
@@ -126,8 +136,8 @@ exports.login = async (req, res) => {
     const userDocRef = db.collection("users").doc(documentId);
     await userDocRef.update(updateData);
 
-    // Create or update session for this device
-    await sessionService.createSession(documentId, deviceId);
+    // Create or update session for this device (include role)
+    await sessionService.createSession(documentId, deviceId, userRole);
 
     // Get updated user data
     const updatedUserDoc = await userDocRef.get();

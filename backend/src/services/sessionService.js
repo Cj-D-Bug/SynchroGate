@@ -1,7 +1,7 @@
-// sessionService.js - Backend service to track active user sessions and enforce one device per user
+// sessionService.js - Backend service to track active user sessions and enforce one device per user and one user per role
 const { firestore, admin } = require('../config/firebase');
 
-// In-memory cache for active sessions (userId -> { deviceId, loginTime, lastActivity })
+// In-memory cache for active sessions (userId -> { deviceId, loginTime, lastActivity, role })
 const activeSessions = new Map();
 
 // Firestore collection name for sessions
@@ -53,6 +53,8 @@ const checkActiveSession = async (userId) => {
             hasActiveSession: true,
             existingDeviceId: sessionData.deviceId,
             loginTime: sessionData.loginTime,
+            role: sessionData.role,
+            existingUserId: userId,
           };
         } else {
           // Session expired, remove from cache
@@ -82,11 +84,14 @@ const checkActiveSession = async (userId) => {
           deviceId: sessionData.deviceId,
           loginTime: sessionData.loginTime,
           lastActivity: lastActivity,
+          role: sessionData.role,
         });
         return {
           hasActiveSession: true,
           existingDeviceId: sessionData.deviceId,
           loginTime: sessionData.loginTime,
+          role: sessionData.role,
+          existingUserId: userId,
         };
       } else {
         // Expired session, delete it
@@ -94,22 +99,23 @@ const checkActiveSession = async (userId) => {
       }
     }
 
-    return { hasActiveSession: false, existingDeviceId: null };
+    return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null };
   } catch (error) {
     console.error('❌ Error checking active session:', error);
-    return { hasActiveSession: false, existingDeviceId: null };
+    return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null };
   }
 };
 
 /**
  * Create or update a user session
  */
-const createSession = async (userId, deviceId) => {
+const createSession = async (userId, deviceId, role) => {
   try {
     const now = new Date();
     const sessionData = {
       userId,
       deviceId,
+      role: role ? role.toLowerCase() : null,
       loginTime: admin.firestore.FieldValue.serverTimestamp(),
       lastActivity: admin.firestore.FieldValue.serverTimestamp(),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -122,9 +128,10 @@ const createSession = async (userId, deviceId) => {
       deviceId,
       loginTime: now,
       lastActivity: now,
+      role: role ? role.toLowerCase() : null,
     });
 
-    console.log(`✅ Session created for user ${userId} on device ${deviceId}`);
+    console.log(`✅ Session created for user ${userId} (role: ${role}) on device ${deviceId}`);
   } catch (error) {
     console.error('❌ Error creating session:', error);
     throw error;
@@ -187,13 +194,58 @@ const invalidateSession = async (userId) => {
 
     if (sessionDoc.exists) {
       const sessionData = sessionDoc.data();
-      console.log(`⚠️ Invalidating existing session for user ${userId} from device ${sessionData.deviceId}`);
+      console.log(`⚠️ Invalidating existing session for user ${userId} (role: ${sessionData.role}) from device ${sessionData.deviceId}`);
     }
 
     // Delete the session
     await deleteSession(userId);
   } catch (error) {
     console.error('❌ Error invalidating session:', error);
+  }
+};
+
+/**
+ * Check if there's an active session for a specific role
+ * Returns { hasActiveSession: boolean, existingUserId: string | null, existingDeviceId: string | null }
+ */
+const checkActiveSessionByRole = async (role) => {
+  try {
+    if (!role) {
+      return { hasActiveSession: false, existingUserId: null, existingDeviceId: null };
+    }
+
+    const normalizedRole = role.toLowerCase();
+    const sessionTimeout = 24 * 60 * 60 * 1000; // 24 hours
+    const now = Date.now();
+
+    // Check Firestore for active sessions with this role
+    const sessionsSnapshot = await firestore
+      .collection(SESSIONS_COLLECTION)
+      .where('role', '==', normalizedRole)
+      .get();
+
+    for (const doc of sessionsSnapshot.docs) {
+      const sessionData = doc.data();
+      const lastActivity = sessionData.lastActivity?.toDate?.() || new Date(sessionData.lastActivity);
+      const isExpired = now - lastActivity.getTime() > sessionTimeout;
+
+      if (!isExpired) {
+        return {
+          hasActiveSession: true,
+          existingUserId: sessionData.userId || doc.id,
+          existingDeviceId: sessionData.deviceId,
+        };
+      } else {
+        // Expired session, delete it
+        await doc.ref.delete();
+        activeSessions.delete(doc.id);
+      }
+    }
+
+    return { hasActiveSession: false, existingUserId: null, existingDeviceId: null };
+  } catch (error) {
+    console.error('❌ Error checking active session by role:', error);
+    return { hasActiveSession: false, existingUserId: null, existingDeviceId: null };
   }
 };
 
@@ -309,6 +361,7 @@ const cleanupListener = () => {
 module.exports = {
   getDeviceId,
   checkActiveSession,
+  checkActiveSessionByRole,
   createSession,
   updateActivity,
   deleteSession,
