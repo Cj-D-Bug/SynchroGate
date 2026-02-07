@@ -9,13 +9,21 @@ const SESSIONS_COLLECTION = 'user_sessions';
 
 /**
  * Get or create a device ID from request headers
- * Uses a combination of user-agent and IP address as device identifier
+ * Uses a combination of user-agent, IP address, and accept-language as device identifier
+ * More reliable than just IP+UA for detecting different devices
  */
 const getDeviceId = (req) => {
   const userAgent = req.headers['user-agent'] || 'unknown';
-  const ip = req.ip || req.connection.remoteAddress || 'unknown';
-  // Create a simple hash-like identifier
-  return `${ip}_${userAgent.substring(0, 50)}`.replace(/[^a-zA-Z0-9_]/g, '_');
+  const ip = req.ip || req.connection?.remoteAddress || req.socket?.remoteAddress || 'unknown';
+  const acceptLanguage = req.headers['accept-language'] || 'unknown';
+  const acceptEncoding = req.headers['accept-encoding'] || 'unknown';
+  
+  // Create a more stable device fingerprint
+  // Include more headers to better distinguish devices
+  const deviceFingerprint = `${ip}_${userAgent.substring(0, 100)}_${acceptLanguage.substring(0, 50)}_${acceptEncoding.substring(0, 30)}`;
+  
+  // Create a simple hash-like identifier (remove special chars)
+  return deviceFingerprint.replace(/[^a-zA-Z0-9_]/g, '_').substring(0, 200);
 };
 
 /**
