@@ -1,0 +1,8 @@
+{
+  "watch": ["src"],
+  "ext": "js,json",
+  "ignore": ["src/**/*.test.js"],
+  "execMap": {
+    "js": "node --experimental-specifier-resolution=node"
+  }
+}

@@ -303,28 +303,35 @@ const initializeUserLoginListener = () => {
     const changes = snapshot.docChanges();
 
     for (const change of changes) {
-      if (change.type === 'modified') {
-        const userData = change.doc.data();
-        const userId = change.doc.id;
-        const newLastLoginAt = userData.lastLoginAt;
-        const oldLastLoginAt = change.doc.metadata.hasPendingWrites 
-          ? null 
-          : (await change.doc.ref.get({ source: 'cache' })).data()?.lastLoginAt;
-
-        // Check if lastLoginAt was updated (user logged in)
-        if (newLastLoginAt && newLastLoginAt !== oldLastLoginAt) {
-          console.log(`🔍 Detected login event for user ${userId}`);
-
-          // Check if there's an existing active session
-          const sessionCheck = await checkActiveSession(userId);
+      try {
+        if (change.type === 'modified') {
+          const userData = change.doc.data();
+          const userId = change.doc.id;
+          const newLastLoginAt = userData.lastLoginAt;
           
-          if (sessionCheck.hasActiveSession) {
-            // There's an active session, but we allow the new login
-            // The old session will be invalidated when the new session is created
-            // This is handled in the login controller
-            console.log(`⚠️ User ${userId} has existing session on device ${sessionCheck.existingDeviceId}, will be invalidated on new login`);
+          // Safely check metadata - it may be undefined in some Firestore versions
+          const hasPendingWrites = change.doc.metadata?.hasPendingWrites ?? false;
+          const oldLastLoginAt = hasPendingWrites 
+            ? null 
+            : (await change.doc.ref.get({ source: 'cache' })).data()?.lastLoginAt;
+
+          // Check if lastLoginAt was updated (user logged in)
+          if (newLastLoginAt && newLastLoginAt !== oldLastLoginAt) {
+            console.log(`🔍 Detected login event for user ${userId}`);
+
+            // Check if there's an existing active session
+            const sessionCheck = await checkActiveSession(userId);
+            
+            if (sessionCheck.hasActiveSession) {
+              // There's an active session, but we allow the new login
+              // The old session will be invalidated when the new session is created
+              // This is handled in the login controller
+              console.log(`⚠️ User ${userId} has existing session on device ${sessionCheck.existingDeviceId}, will be invalidated on new login`);
+            }
           }
         }
+      } catch (error) {
+        console.error(`❌ Error processing change for document ${change.doc?.id || 'unknown'}:`, error);
       }
     }
   }, (error) => {
