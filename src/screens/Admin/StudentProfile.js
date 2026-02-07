@@ -745,6 +745,74 @@ const StudentProfile = () => {
           console.log('Error writing account_verified alert (non‑critical):', e);
         }
 
+        // Automatically generate QR code if student doesn't have one
+        let qrCodeGenerated = false;
+        try {
+          const sid = String(currentStudent.studentId || currentStudent.id);
+          if (sid) {
+            // Check if QR code already exists
+            const qrDocRef = doc(db, 'student_QRcodes', sid);
+            const qrDoc = await getDoc(qrDocRef);
+            
+            if (!qrDoc.exists()) {
+              // Also check by query in case it exists with different document ID
+              const qrQuery = query(collection(db, 'student_QRcodes'), where('studentId', '==', sid));
+              const qrSnapshot = await getDocs(qrQuery);
+              
+              if (qrSnapshot.empty) {
+                // Generate QR code
+                const qrValue = `${sid}:${Date.now()}`;
+                await setDoc(qrDocRef, {
+                  studentId: sid,
+                  qrCodeUrl: qrValue,
+                  generatedAt: nowIso,
+                  createdAt: nowIso,
+                });
+                
+                console.log('✅ Auto-generated QR code for verified student:', sid);
+                qrCodeGenerated = true;
+                
+                // Update local state
+                setHasQR(true);
+                
+                // Notify student about QR code generation
+                try {
+                  const studentAlertsRef = doc(db, 'student_alerts', sid);
+                  const qrNotif = {
+                    id: `qr_generated_${sid}_${Date.now()}`,
+                    type: 'qr_generated',
+                    title: 'QR Code Generated',
+                    message: 'Your QR code has been automatically generated. You can now use it for campus access.',
+                    createdAt: nowIso,
+                    status: 'unread',
+                    studentId: sid,
+                  };
+                  try {
+                    const snap = await getDoc(studentAlertsRef);
+                    if (snap.exists()) {
+                      await updateDoc(studentAlertsRef, { items: arrayUnion(qrNotif) });
+                    } else {
+                      await setDoc(studentAlertsRef, { items: [qrNotif] }, { merge: true });
+                    }
+                  } catch {
+                    await setDoc(studentAlertsRef, { items: arrayUnion(qrNotif) }, { merge: true });
+                  }
+                } catch (qrNotifError) {
+                  console.log('Error writing QR generated alert (non‑critical):', qrNotifError);
+                }
+              } else {
+                // QR code exists, update local state
+                setHasQR(true);
+              }
+            } else {
+              // QR code exists, update local state
+              setHasQR(true);
+            }
+          }
+        } catch (qrError) {
+          console.log('Error generating QR code during verification (non‑critical):', qrError);
+        }
+
         // Log admin activity
         try {
           const activityRef = doc(db, 'admin_activity_logs', 'global');
@@ -757,7 +825,7 @@ const StudentProfile = () => {
             id,
             type: 'student_verified',
             title: 'Student Account Verified',
-            message: `Verified student account: ${currentStudent.firstName} ${currentStudent.lastName} (${currentStudent.studentId})`,
+            message: `Verified student account: ${currentStudent.firstName} ${currentStudent.lastName} (${currentStudent.studentId})${qrCodeGenerated ? ' and QR code generated' : ''}`,
             createdAt: nowIso,
             status: 'unread',
             student: {
@@ -773,7 +841,9 @@ const StudentProfile = () => {
         }
 
         setFeedbackTitle('Success');
-        setFeedbackMessage('Student account has been verified.');
+        setFeedbackMessage(qrCodeGenerated 
+          ? 'Student account has been verified and QR code generated.'
+          : 'Student account has been verified.');
         setFeedbackTextColor('#16A34A');
         setFeedbackVisible(true);
 

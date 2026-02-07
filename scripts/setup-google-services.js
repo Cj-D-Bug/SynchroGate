@@ -74,14 +74,45 @@ if (GOOGLE_SERVICES_JSON) {
   
   console.log('✅ Successfully copied google-services.json to Android directories');
 } else {
-  console.error('❌ Error: google-services.json not found and GOOGLE_SERVICES_JSON secret not set');
-  console.error('');
-  console.error('Please either:');
-  console.error('  1. Commit google-services.json to your git repository, or');
-  console.error('  2. Set GOOGLE_SERVICES_JSON as an EAS secret:');
-  console.error('     eas secret:create --scope project --name GOOGLE_SERVICES_JSON --type string');
-  console.error('');
-  process.exit(1);
+  // Create a minimal placeholder for prebuild to succeed
+  // The pre-build hook will replace it with the real one if available
+  console.warn('⚠️  google-services.json not found and GOOGLE_SERVICES_JSON secret not set');
+  console.warn('📝 Creating placeholder google-services.json for prebuild (will be replaced by pre-build hook)');
+  
+  const placeholderContent = JSON.stringify({
+    project_info: {
+      project_number: "000000000000",
+      project_id: "placeholder",
+      storage_bucket: "placeholder.appspot.com"
+    },
+    client: [{
+      client_info: {
+        mobilesdk_app_id: "1:000000000000:android:placeholder",
+        android_client_info: {
+          package_name: "com.palabay.synchrogate"
+        }
+      },
+      oauth_client: [],
+      api_key: [{
+        current_key: "placeholder"
+      }],
+      services: {
+        appinvite_service: {
+          other_platform_oauth_client: []
+        }
+      }
+    }],
+    configuration_version: "1"
+  }, null, 2);
+  
+  // Create placeholder in root
+  if (!writeGoogleServices(placeholderContent, googleServicesPath)) {
+    console.error('❌ Failed to create placeholder google-services.json');
+    process.exit(1);
+  }
+  
+  console.warn('⚠️  Using placeholder google-services.json - Firebase features may not work until real file is provided');
+  console.warn('💡 To fix: Set GOOGLE_SERVICES_JSON as an EAS secret or commit google-services.json to repository');
 }
 
 console.log('✅ Google Services setup complete!');

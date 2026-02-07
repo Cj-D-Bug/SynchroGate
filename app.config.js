@@ -27,7 +27,41 @@ if (GOOGLE_SERVICES_JSON &&
 if (fs.existsSync(googleServicesPath)) {
   console.log('✅ google-services.json found at project root');
 } else {
-  console.warn('⚠️  google-services.json not found - Firebase may not work');
+  console.warn('⚠️  google-services.json not found - will be created by pre-build hook or plugin');
+  // Create a minimal placeholder if it doesn't exist (for prebuild to succeed)
+  // The pre-build hook will replace it with the real one
+  const minimalGoogleServices = {
+    project_info: {
+      project_number: "000000000000",
+      project_id: "placeholder",
+      storage_bucket: "placeholder.appspot.com"
+    },
+    client: [{
+      client_info: {
+        mobilesdk_app_id: "1:000000000000:android:placeholder",
+        android_client_info: {
+          package_name: "com.palabay.synchrogate"
+        }
+      },
+      oauth_client: [],
+      api_key: [{
+        current_key: "placeholder"
+      }],
+      services: {
+        appinvite_service: {
+          other_platform_oauth_client: []
+        }
+      }
+    }],
+    configuration_version: "1"
+  };
+  
+  try {
+    fs.writeFileSync(googleServicesPath, JSON.stringify(minimalGoogleServices, null, 2));
+    console.log('✅ Created placeholder google-services.json (will be replaced by pre-build hook)');
+  } catch (error) {
+    console.warn('⚠️  Could not create placeholder google-services.json:', error.message);
+  }
 }
 
 module.exports = appJson;

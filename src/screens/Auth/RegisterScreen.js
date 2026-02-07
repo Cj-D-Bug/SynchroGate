@@ -21,7 +21,7 @@ import {
 import theme from '../../utils/theme';
 import { Ionicons } from '@expo/vector-icons';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc, collection, query, where, getDocs, getDoc } from 'firebase/firestore';
+import { doc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { auth, db } from '../../utils/firebaseConfig';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -247,26 +247,17 @@ const RegisterScreen = () => {
   const [lastName, setLastName] = useState('');
   const [firstName, setFirstName] = useState('');
   const [middleName, setMiddleName] = useState('');
-  // Parent / Guardian information (for student registrations)
-  const [parentLastName, setParentLastName] = useState('');
-  const [parentFirstName, setParentFirstName] = useState('');
-  const [parentMiddleName, setParentMiddleName] = useState('');
-  const [parentGender, setParentGender] = useState('');
   const [gender, setGender] = useState('');
   const [age, setAge] = useState('');
   const [birthday, setBirthday] = useState(null);
-  const [parentBirthday, setParentBirthday] = useState(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [contactNumber, setContactNumber] = useState('');
   const [address, setAddress] = useState('');
-  const [parentContactNumber, setParentContactNumber] = useState('');
-  const [parentAddress, setParentAddress] = useState('');
   const [course, setCourse] = useState('');
   const [section, setSection] = useState('');
   const [yearLevel, setYearLevel] = useState('');
   const [studentId, setStudentId] = useState('');
   const [email, setEmail] = useState('');
-  const [parentEmail, setParentEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -532,7 +523,6 @@ const RegisterScreen = () => {
   const [showCalendarModal, setShowCalendarModal] = useState(false);
   const [showYearPicker, setShowYearPicker] = useState(false);
   const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
-  const [activeBirthdayField, setActiveBirthdayField] = useState(null); // 'student' | 'parent' | null
   
   // Generate year options from 1900 to current year
   const yearPickerOptions = Array.from(
@@ -542,13 +532,11 @@ const RegisterScreen = () => {
   
   const openCalendarModal = () => {
     setShowCalendarModal(true);
-    // Decide which birthday we are editing
-    const baseDate = activeBirthdayField === 'parent' ? parentBirthday : birthday;
     let birthYear = new Date().getFullYear();
-    if (baseDate instanceof Date) {
-      birthYear = baseDate.getFullYear();
-    } else if (typeof baseDate === 'string' && baseDate) {
-      birthYear = new Date(baseDate).getFullYear();
+    if (birthday instanceof Date) {
+      birthYear = birthday.getFullYear();
+    } else if (typeof birthday === 'string' && birthday) {
+      birthYear = new Date(birthday).getFullYear();
     }
     setCurrentYear(birthYear);
   };
@@ -558,7 +546,7 @@ const RegisterScreen = () => {
   };
 
   const handleDateSelect = (selectedDate) => {
-    // Check if user is at least 15 years old (applies both to student and parent)
+    // Check if user is at least 15 years old
     if (!isMinimumAge(selectedDate)) {
       setErrorMessage('You must be at least 15 years old to register. Please select a different birth date.');
       setErrorModalVisible(true);
@@ -568,14 +556,10 @@ const RegisterScreen = () => {
       }, 1500);
       return;
     }
-
-    if (activeBirthdayField === 'parent') {
-      setParentBirthday(selectedDate);
-    } else {
-      setBirthday(selectedDate);
-      const calculatedAge = calculateAge(selectedDate);
-      setAge(calculatedAge.toString());
-    }
+    
+    setBirthday(selectedDate);
+    const calculatedAge = calculateAge(selectedDate);
+    setAge(calculatedAge.toString());
     closeCalendarModal();
   };
 
@@ -625,7 +609,6 @@ const RegisterScreen = () => {
     let error = '';
     
     switch (fieldName) {
-      // Student personal info
       case 'lastName':
         if (!value.trim()) error = 'Last name is required';
         else if (value.trim().length < 2) error = 'Last name must be at least 2 characters';
@@ -638,30 +621,6 @@ const RegisterScreen = () => {
         if (!value.trim()) error = 'Middle name is required';
         else if (value.trim().length < 2) error = 'Middle name must be at least 2 characters';
         break;
-      // Parent / Guardian info (for student registrations)
-      case 'parentLastName':
-        if (role !== 'parent') {
-          if (!value.trim()) error = 'Parent last name is required';
-          else if (value.trim().length < 2) error = 'Parent last name must be at least 2 characters';
-        }
-        break;
-      case 'parentFirstName':
-        if (role !== 'parent') {
-          if (!value.trim()) error = 'Parent first name is required';
-          else if (value.trim().length < 2) error = 'Parent first name must be at least 2 characters';
-        }
-        break;
-      case 'parentMiddleName':
-        if (role !== 'parent') {
-          if (!value.trim()) error = 'Parent middle name is required';
-          else if (value.trim().length < 2) error = 'Parent middle name must be at least 2 characters';
-        }
-        break;
-      case 'parentGender':
-        if (role !== 'parent') {
-          if (!value) error = 'Parent / Guardian gender is required';
-        }
-        break;
       case 'gender':
         if (!value) error = 'Gender is required';
         break;
@@ -673,31 +632,13 @@ const RegisterScreen = () => {
         if (!value) error = 'Birthday is required';
         else if (value instanceof Date && isNaN(value.getTime())) error = 'Please select a valid birthday';
         break;
-      case 'parentBirthday':
-        if (role !== 'parent') {
-          if (!value) error = 'Parent birthday is required';
-          else if (value instanceof Date && isNaN(value.getTime())) error = 'Please select a valid parent birthday';
-        }
-        break;
       case 'contactNumber':
         if (!value || value === '+63') error = 'Contact number is required';
         else if (value.length < 13) error = 'Contact number must be complete (+63XXXXXXXXXX)';
         break;
-      case 'parentContactNumber':
-        if (role !== 'parent') {
-          if (!value || value === '+63') error = 'Parent contact number is required';
-          else if (value.length < 13) error = 'Parent contact number must be complete (+63XXXXXXXXXX)';
-        }
-        break;
       case 'address':
         if (!value.trim()) error = 'Address is required';
         else if (value.trim().length < 5) error = 'Address must be at least 5 characters';
-        break;
-      case 'parentAddress':
-        if (role !== 'parent') {
-          if (!value.trim()) error = 'Parent address is required';
-          else if (value.trim().length < 5) error = 'Parent address must be at least 5 characters';
-        }
         break;
       case 'course':
         if (role !== 'parent' && !value) error = 'Course is required';
@@ -715,12 +656,6 @@ const RegisterScreen = () => {
       case 'email':
         if (!value.trim()) error = 'Email is required';
         else if (!/\S+@\S+\.\S+/.test(value.trim())) error = 'Please enter a valid email address';
-        break;
-      case 'parentEmail':
-        // Optional, but if provided must be valid
-        if (value && value.trim() && !/\S+@\S+\.\S+/.test(value.trim())) {
-          error = 'Please enter a valid parent email address';
-        }
         break;
       case 'password':
         if (!value) error = 'Password is required';
@@ -761,24 +696,16 @@ const RegisterScreen = () => {
         case 'lastName': value = lastName; break;
         case 'firstName': value = firstName; break;
         case 'middleName': value = middleName; break;
-        case 'parentLastName': value = parentLastName; break;
-        case 'parentFirstName': value = parentFirstName; break;
-        case 'parentMiddleName': value = parentMiddleName; break;
-        case 'parentGender': value = parentGender; break;
         case 'gender': value = gender; break;
         case 'age': value = age; break;
         case 'birthday': value = birthday; break;
-        case 'parentBirthday': value = parentBirthday; break;
         case 'contactNumber': value = contactNumber; break;
-        case 'parentContactNumber': value = parentContactNumber; break;
         case 'address': value = address; break;
-        case 'parentAddress': value = parentAddress; break;
         case 'course': value = course; break;
         case 'section': value = section; break;
         case 'yearLevel': value = yearLevel; break;
         case 'studentId': value = studentId; break;
         case 'email': value = email; break;
-        case 'parentEmail': value = parentEmail; break;
         case 'password': value = password; break;
         case 'confirmPassword': value = confirmPassword; break;
         default: break;
@@ -807,19 +734,7 @@ const RegisterScreen = () => {
     ];
 
     if (role !== 'parent') {
-      requiredFields.push(
-        'course',
-        'section',
-        'yearLevel',
-        'studentId',
-        'parentLastName',
-        'parentFirstName',
-        'parentMiddleName',
-        'parentGender',
-        'parentBirthday',
-        'parentContactNumber',
-        'parentAddress',
-      );
+      requiredFields.push('course', 'section', 'yearLevel', 'studentId');
     }
 
     const getFieldValue = (fieldName) => {
@@ -827,24 +742,16 @@ const RegisterScreen = () => {
         case 'lastName': return lastName;
         case 'firstName': return firstName;
         case 'middleName': return middleName;
-        case 'parentLastName': return parentLastName;
-        case 'parentFirstName': return parentFirstName;
-        case 'parentMiddleName': return parentMiddleName;
-        case 'parentGender': return parentGender;
         case 'gender': return gender;
         case 'age': return age;
         case 'birthday': return birthday;
-        case 'parentBirthday': return parentBirthday;
         case 'contactNumber': return contactNumber;
-        case 'parentContactNumber': return parentContactNumber;
         case 'address': return address;
-        case 'parentAddress': return parentAddress;
         case 'course': return course;
         case 'section': return section;
         case 'yearLevel': return yearLevel;
         case 'studentId': return studentId;
         case 'email': return email;
-        case 'parentEmail': return parentEmail;
         case 'password': return password;
         case 'confirmPassword': return confirmPassword;
         case 'acceptedTerms': return acceptedTerms;
@@ -993,17 +900,6 @@ const RegisterScreen = () => {
         birthday: birthday instanceof Date ? birthday.toISOString().split('T')[0] : null, 
         contactNumber, 
         address: address.trim(),
-        // Parent / Guardian info (only meaningful for student registrations)
-        parentLastName: isStudentRole ? parentLastName.trim() : '',
-        parentFirstName: isStudentRole ? parentFirstName.trim() : '',
-        parentMiddleName: isStudentRole ? parentMiddleName.trim() : '',
-        parentGender: isStudentRole ? parentGender : '',
-        parentBirthday: isStudentRole && parentBirthday instanceof Date
-          ? parentBirthday.toISOString().split('T')[0]
-          : null,
-        parentContactNumber: isStudentRole ? parentContactNumber : '',
-        parentAddress: isStudentRole ? parentAddress.trim() : '',
-        parentEmail: isStudentRole ? parentEmail.trim().toLowerCase() : '',
         course: normalizedRole === 'parent' ? '' : course,
         section: normalizedRole === 'parent' ? '' : section,
         yearLevel: normalizedRole === 'parent' ? '' : yearLevel,
@@ -1025,39 +921,6 @@ const RegisterScreen = () => {
       await setDoc(doc(db, 'users', documentId), userData);
 
       console.log('User data saved to Firestore:', userData);
-
-      // Create admin alert for student verification if student registered
-      if (isStudentRole && !userData.isVerify) {
-        try {
-          const adminAlertsRef = doc(db, 'admin_alerts', 'inbox');
-          const adminAlertsSnap = await getDoc(adminAlertsRef);
-          const existingItems = adminAlertsSnap.exists() 
-            ? (Array.isArray(adminAlertsSnap.data()?.items) ? adminAlertsSnap.data().items : [])
-            : [];
-          
-          const studentName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || 'Student';
-          const verificationAlert = {
-            id: `student_verification_${documentId}_${Date.now()}`,
-            type: 'student_verification_pending',
-            title: 'Student Verification Required',
-            message: `${studentName} (${studentId}) has registered and needs verification. Please verify the student account to allow access.`,
-            createdAt: new Date().toISOString(),
-            status: 'unread',
-            studentId: studentId,
-            studentName: studentName,
-            yearLevel: userData.yearLevel || '',
-            course: userData.course || '',
-            section: userData.section || '',
-          };
-          
-          const updatedItems = [verificationAlert, ...existingItems];
-          await setDoc(adminAlertsRef, { items: updatedItems }, { merge: true });
-          console.log('✅ Admin alert created for student verification:', verificationAlert.id);
-        } catch (alertError) {
-          console.error('Error creating admin alert for student verification:', alertError);
-          // Don't fail registration if alert creation fails
-        }
-      }
 
       // Show success modal, then navigate to Login (role-dependent)
       const successText = `Registration successful!${role === 'parent' ? `\n\nYour Parent ID is: ${generatedParentId}\n\nPlease save this ID for future reference.` : ''}`;
@@ -1215,10 +1078,7 @@ const RegisterScreen = () => {
         </View>
         <View style={styles.rowInput}>
           <TouchableOpacity 
-            onPress={() => {
-              setActiveBirthdayField('student');
-              openCalendarModal();
-            }} 
+            onPress={openCalendarModal} 
             activeOpacity={0.8}
             style={{ width: '100%' }}
           >
@@ -1395,141 +1255,6 @@ const RegisterScreen = () => {
         </TouchableOpacity>
       </View>
 
-      {/* Parent / Guardian Information (for students) */}
-      {role !== 'parent' && (
-        <>
-          <Text style={[styles.title, { fontSize: 20, marginTop: 24, marginBottom: 6 }]}>
-            Parent / Guardian Information
-          </Text>
-          <Text style={[styles.warningText, { fontSize: 10, marginBottom: 10 }]}>
-            These details are required for verification and contact purposes. Parent email is optional.
-          </Text>
-
-          <InputField
-            label="Parent / Guardian Last Name"
-            value={parentLastName}
-            onChangeText={(text) => handleAlphabetic(text, setParentLastName, 20)}
-            placeholder="Enter parent / guardian last name"
-            error={touched.parentLastName ? errors.parentLastName : ''}
-            onBlur={() => handleFieldBlur('parentLastName')}
-            maxLength={20}
-          />
-          <InputField
-            label="Parent / Guardian First Name"
-            value={parentFirstName}
-            onChangeText={(text) => handleAlphabetic(text, setParentFirstName, 20)}
-            placeholder="Enter parent / guardian first name"
-            error={touched.parentFirstName ? errors.parentFirstName : ''}
-            onBlur={() => handleFieldBlur('parentFirstName')}
-            maxLength={20}
-          />
-          <InputField
-            label="Parent / Guardian Middle Name"
-            value={parentMiddleName}
-            onChangeText={(text) => handleAlphabetic(text, setParentMiddleName, 20)}
-            placeholder="Enter parent / guardian middle name"
-            error={touched.parentMiddleName ? errors.parentMiddleName : ''}
-            onBlur={() => handleFieldBlur('parentMiddleName')}
-            maxLength={20}
-          />
-
-          {/* Parent / Guardian Gender */}
-          <View style={styles.row}>
-            <View style={styles.rowInput}>
-              <Text style={styles.label}>Parent / Guardian Gender</Text>
-              <ExpandableDropdown
-                field="parentGender"
-                options={genderOptions}
-                selectedValue={parentGender}
-                onSelect={(value) => {
-                  setParentGender(value);
-                  handleFieldBlur('parentGender', value);
-                }}
-                error={touched.parentGender ? errors.parentGender : ''}
-                placeholder="Select"
-              />
-              {touched.parentGender && errors.parentGender && (
-                <Text style={styles.errorText}>{errors.parentGender}</Text>
-              )}
-            </View>
-          </View>
-
-          {/* Parent Birthday */}
-          <View style={styles.row}>
-            <View style={styles.rowInput}>
-              <TouchableOpacity
-                onPress={() => {
-                  setActiveBirthdayField('parent');
-                  openCalendarModal();
-                }}
-                activeOpacity={0.8}
-                style={{ width: '100%' }}
-              >
-                <View pointerEvents="none" style={{ width: '100%' }}>
-                  <InputField
-                    label="Parent / Guardian Birthday"
-                    value={
-                      parentBirthday instanceof Date
-                        ? parentBirthday.toLocaleDateString()
-                        : (typeof parentBirthday === 'string' ? parentBirthday : '')
-                    }
-                    editable={false}
-                    placeholder="Select parent / guardian birthdate"
-                    style={{ textAlign: 'center', backgroundColor: '#F0F9FF', width: '100%' }}
-                    error={touched.parentBirthday ? errors.parentBirthday : ''}
-                    onBlur={() => handleFieldBlur('parentBirthday')}
-                  />
-                </View>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* Parent Contact Number */}
-          <InputField
-            label="Parent / Guardian Contact Number"
-            value={parentContactNumber}
-            onChangeText={(text) => {
-              // Reuse contact handler logic for +63 format
-              const cleanText = text.replace('+63', '');
-              const filtered = cleanText.replace(/[^0-9]/g, '').slice(0, 10);
-              setParentContactNumber('+63' + filtered);
-              clearValidationErrors();
-            }}
-            placeholder="+63XXXXXXXXXX"
-            keyboardType="number-pad"
-            error={touched.parentContactNumber ? errors.parentContactNumber : ''}
-            onBlur={() => handleFieldBlur('parentContactNumber')}
-            maxLength={13}
-          />
-
-          {/* Parent Address */}
-          <InputField
-            label="Parent / Guardian Address"
-            value={parentAddress}
-            onChangeText={(text) => handleAlphanumericAddress(text, setParentAddress, 50)}
-            placeholder="Enter parent / guardian address"
-            error={touched.parentAddress ? errors.parentAddress : ''}
-            onBlur={() => handleFieldBlur('parentAddress')}
-            maxLength={50}
-          />
-
-          {/* Parent Email (optional) */}
-          <InputField
-            label="Parent / Guardian Email (Optional)"
-            value={parentEmail}
-            onChangeText={(text) => {
-              setParentEmail(text);
-              clearValidationErrors();
-            }}
-            autoCapitalize="none"
-            keyboardType="email-address"
-            placeholder="Enter parent email (optional)"
-            error={touched.parentEmail ? errors.parentEmail : ''}
-            onBlur={() => handleFieldBlur('parentEmail')}
-          />
-        </>
-      )}
-
       {/* Register Button */}
       <TouchableOpacity
         style={[styles.loginButton, loading && styles.loginButtonDisabled]}
@@ -1621,7 +1346,7 @@ const RegisterScreen = () => {
                 
                 <CalendarPicker
                   onDateSelect={handleDateSelect}
-                  selectedDate={activeBirthdayField === 'parent' ? parentBirthday : birthday}
+                  selectedDate={birthday}
                   maxDate={new Date()}
                   minDate={new Date(1960, 0, 1)}
                   currentYear={currentYear}
