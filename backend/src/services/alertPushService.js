@@ -280,17 +280,18 @@ const sendPushForAlert = async (alert, role, userId) => {
         return;
       }
       
-      // For attendance_scan alerts, use FCM token from link if available
+      // For attendance_scan alerts, use FCM token from link if available, else parent user doc
       if (linkDocument && (alert.type === 'attendance_scan' || alert.alertType === 'attendance_scan')) {
         const linkData = linkDocument.data();
         const linkParentFcmToken = linkData?.parentFcmToken || null;
+        const tokenToUse = linkParentFcmToken || userData.fcmToken;
         
-        if (linkParentFcmToken && userData.fcmToken) {
+        if (tokenToUse) {
           const title = alert.title || 'New Alert';
           const body = alert.message || alert.body || 'You have a new alert';
           
           await pushService.sendPush(
-            linkParentFcmToken,
+            tokenToUse,
             title,
             body,
             {
@@ -309,7 +310,7 @@ const sendPushForAlert = async (alert, role, userId) => {
           );
           
           notifiedAlerts.set(deduplicationKey, Date.now());
-          console.log(`✅✅✅ PUSH SENT to ${role} ${userId} (${userData.uid}) using link token - ${title}`);
+          console.log(`✅✅✅ PUSH SENT to ${role} ${userId} (${userData.uid}) - ${title}`);
           return;
         }
       }
