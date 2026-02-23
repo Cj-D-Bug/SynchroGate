@@ -243,7 +243,20 @@ exports.logout = async (req, res) => {
 
     // Delete the session
     await sessionService.deleteSession(documentId);
-    
+
+    // Clear FCM token and login timestamp so no push notifications are sent to this device
+    try {
+      await userDoc.ref.update({
+        fcmToken: null,
+        pushTokenType: null,
+        pushTokenUpdatedAt: null,
+        lastLoginAt: null,
+      });
+      console.log(`✅ [LOGOUT] FCM token and lastLoginAt cleared for user ${documentId}`);
+    } catch (clearErr) {
+      console.warn('⚠️ [LOGOUT] Failed to clear FCM token (non-blocking):', clearErr?.message);
+    }
+
     console.log(`✅ ========== LOGGED OUT SUCCESSFULLY ==========`);
     console.log(`✅ Student ID: ${documentId}`);
     console.log(`✅ Name: ${fullName}`);

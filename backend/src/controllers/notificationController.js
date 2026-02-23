@@ -99,6 +99,15 @@ const sendPushNotification = async (req, res, next) => {
         }
       }
     }
+
+    // Must have an FCM token to send push (user may not have one if app wasn't built with FCM)
+    if (!fcmTokenToUse || typeof fcmTokenToUse !== 'string' || !fcmTokenToUse.trim()) {
+      return res.status(400).json({
+        error: 'User has no FCM token registered. The app must be built with Firebase (google-services.json) and the user must have granted notification permission.',
+        userId,
+        role,
+      });
+    }
     
     // Send notification
     const result = await pushService.sendPush(

@@ -16,11 +16,22 @@ const sendPushNotification = async (fcmToken, title, body, data = {}) => {
       throw new Error('Invalid FCM token provided');
     }
     
-    // CRITICAL: Additional validation - ensure token looks valid
-    // FCM tokens are typically 152-163 characters long
-    if (fcmToken.length < 100 || fcmToken.length > 200) {
+    // FCM tokens are typically 152–163 chars; allow a wider range for compatibility
+    if (fcmToken.length < 80 || fcmToken.length > 300) {
       throw new Error('FCM token length is invalid');
     }
+
+    // FCM data payload: every value must be a string; omit undefined/null
+    const dataPayload = {
+      title: String(title || 'Notification'),
+      body: String(body || ''),
+    };
+    Object.keys(data || {}).forEach((key) => {
+      const v = data[key];
+      if (v !== undefined && v !== null) {
+        dataPayload[key] = String(v);
+      }
+    });
 
     // Build FCM message
     // CRITICAL: When app is closed, FCM automatically displays notifications
@@ -31,21 +42,10 @@ const sendPushNotification = async (fcmToken, title, body, data = {}) => {
       notification: {
         title: title || 'Notification',
         body: body || '',
-        // Add image if available in data
-        imageUrl: data.imageUrl || undefined,
+        imageUrl: data?.imageUrl ? String(data.imageUrl) : undefined,
       },
-      // Data payload - available to app when notification is tapped
-      data: {
-        ...data,
-        // Convert all data values to strings (FCM requirement)
-        ...Object.keys(data).reduce((acc, key) => {
-          acc[key] = String(data[key]);
-          return acc;
-        }, {}),
-        // Ensure title and body are in data for app to use when opened
-        title: String(title || 'Notification'),
-        body: String(body || ''),
-      },
+      // Data payload - all string values (FCM requirement)
+      data: dataPayload,
       android: {
         // CRITICAL: 'high' priority ensures notification is delivered even when app is closed
         priority: 'high',
@@ -68,7 +68,7 @@ const sendPushNotification = async (fcmToken, title, body, data = {}) => {
         // Critical: These settings ensure notifications work when app is closed
         ttl: 86400000, // 24 hours - how long notification is valid
         // Use unique collapse key per alert to prevent collapsing different alerts
-        collapseKey: data.alertId || `alert_${Date.now()}`,
+        collapseKey: (data && data.alertId) ? String(data.alertId) : `alert_${Date.now()}`,
         // Direct boot mode - deliver notification even after reboot
         directBootOk: true,
       },
@@ -92,7 +92,7 @@ const sendPushNotification = async (fcmToken, title, body, data = {}) => {
       },
     };
 
-    // Send via Firebase Admin SDK
+    // Send via Firebase Admin SDK (requires Cloud Messaging API enabled in Google Cloud Console)
     const response = await admin.messaging().send(message);
     
     console.log('✅ FCM push notification sent successfully:', response);
@@ -102,10 +102,11 @@ const sendPushNotification = async (fcmToken, title, body, data = {}) => {
       token: fcmToken,
     };
   } catch (err) {
-    console.error('❌ FCM push notification failed:', err);
-    
-    // Re-throw the error so the controller can handle it properly
-    // This allows the controller to update the database and provide better error messages
+    const msg = err?.message || String(err);
+    console.error('❌ FCM push notification failed:', msg);
+    if (/permission|403|not enabled|API has not been used/i.test(msg)) {
+      console.error('   Enable "Firebase Cloud Messaging API" in Google Cloud Console → APIs & Services for your project.');
+    }
     throw err;
   }
 };
@@ -124,18 +125,20 @@ const sendPushNotificationToMultiple = async (fcmTokens, title, body, data = {})
       throw new Error('Invalid FCM tokens array');
     }
 
+    // FCM data payload: every value must be a string
+    const dataPayload = { title: String(title || 'Notification'), body: String(body || '') };
+    Object.keys(data || {}).forEach((key) => {
+      const v = data[key];
+      if (v !== undefined && v !== null) dataPayload[key] = String(v);
+    });
+
     // Build multicast message
     const message = {
       notification: {
         title: title || 'Notification',
         body: body || '',
       },
-      data: {
-        ...Object.keys(data).reduce((acc, key) => {
-          acc[key] = String(data[key]);
-          return acc;
-        }, {}),
-      },
+      data: dataPayload,
       android: {
         priority: 'high',
         notification: {
