@@ -12,6 +12,7 @@ let alertListeners = {
   studentCollection: null,
   parentCollection: null,
   conversations: null,
+  scans: null,
 };
 
 // Track which alerts we've already notified about (prevent duplicates)
@@ -280,18 +281,17 @@ const sendPushForAlert = async (alert, role, userId) => {
         return;
       }
       
-      // For attendance_scan alerts, use FCM token from link if available, else parent user doc
+      // For attendance_scan alerts, use FCM token from link if available
       if (linkDocument && (alert.type === 'attendance_scan' || alert.alertType === 'attendance_scan')) {
         const linkData = linkDocument.data();
         const linkParentFcmToken = linkData?.parentFcmToken || null;
-        const tokenToUse = linkParentFcmToken || userData.fcmToken;
         
-        if (tokenToUse) {
+        if (linkParentFcmToken && userData.fcmToken) {
           const title = alert.title || 'New Alert';
           const body = alert.message || alert.body || 'You have a new alert';
           
           await pushService.sendPush(
-            tokenToUse,
+            linkParentFcmToken,
             title,
             body,
             {
@@ -310,7 +310,7 @@ const sendPushForAlert = async (alert, role, userId) => {
           );
           
           notifiedAlerts.set(deduplicationKey, Date.now());
-          console.log(`✅✅✅ PUSH SENT to ${role} ${userId} (${userData.uid}) - ${title}`);
+          console.log(`✅✅✅ PUSH SENT to ${role} ${userId} (${userData.uid}) using link token - ${title}`);
           return;
         }
       }
@@ -751,6 +751,148 @@ const initializeStudentAlertsListener = () => {
   });
   
   console.log('✅ Student alerts listener initialized');
+};
+
+/**
+ * When a new scan is written to student_attendances/{studentId}/scans, create an
+ * attendance_scan alert in student_alerts (and in each linked parent's parent_alerts)
+ * so the existing student_alerts listener can send push to student and linked parents.
+ */
+const initializeScanAlertsListener = () => {
+  if (alertListeners.scans) {
+    alertListeners.scans();
+    alertListeners.scans = null;
+  }
+
+  const FieldValue = admin.firestore.FieldValue;
+  const scansGroup = firestore.collectionGroup('scans');
+  let isFirstSnapshot = true;
+
+  const unsubscribe = scansGroup.onSnapshot(async (snapshot) => {
+    // Skip initial snapshot to avoid creating alerts for old scans on server restart
+    if (isFirstSnapshot) {
+      isFirstSnapshot = false;
+      console.log('✅ [SCAN] Scans collection group first snapshot received (ignored)');
+      return;
+    }
+
+    for (const change of snapshot.docChanges()) {
+      if (change.type !== 'added') continue;
+
+      const scanRef = change.doc.ref;
+      const scanId = change.doc.id;
+      const scanData = change.doc.data() || {};
+
+      // Path: student_attendances/{studentId}/scans/{scanId}
+      const parentRef = scanRef.parent?.parent;
+      if (!parentRef) continue;
+      const studentId = parentRef.id;
+
+      const entry = (scanData.entry || '').toUpperCase() === 'OUT' ? 'OUT' : 'IN';
+      let createdAtIso = new Date().toISOString();
+      let scanTimeMs = Date.now();
+      const timeOfScanned = scanData.timeOfScanned;
+      if (timeOfScanned) {
+        try {
+          if (typeof timeOfScanned.toDate === 'function') {
+            createdAtIso = timeOfScanned.toDate().toISOString();
+            scanTimeMs = timeOfScanned.toDate().getTime();
+          } else if (timeOfScanned.seconds != null) {
+            scanTimeMs = timeOfScanned.seconds * 1000;
+            createdAtIso = new Date(scanTimeMs).toISOString();
+          }
+        } catch (_) {}
+      }
+      // Only create alert if scan is from the last 2 minutes (avoids duplicates from reconnect)
+      if (Date.now() - scanTimeMs > 2 * 60 * 1000) {
+        console.log(`⏭️ [SCAN] Skipping old scan ${scanId} for student ${studentId}`);
+        continue;
+      }
+
+      const scanLocation = scanData.scanLocation || '';
+      const directionLabel = entry === 'IN' ? 'in' : 'out';
+      const title = `Scanned ${directionLabel}`;
+      const message = scanLocation
+        ? `You scanned ${directionLabel} at ${scanLocation}.`
+        : `You scanned ${directionLabel}.`;
+
+      const alertItem = {
+        id: `attendance_scan_${studentId}_${scanId}_${Date.now()}`,
+        alertId: `attendance_scan_${studentId}_${scanId}_${Date.now()}`,
+        type: 'attendance_scan',
+        alertType: 'attendance_scan',
+        title,
+        message,
+        createdAt: createdAtIso,
+        status: 'unread',
+        studentId,
+        scanId,
+        entry,
+        scanLocation: scanLocation || undefined,
+      };
+
+      try {
+        const studentAlertsRef = firestore.collection('student_alerts').doc(studentId);
+        const studentAlertsSnap = await studentAlertsRef.get();
+        if (studentAlertsSnap.exists) {
+          await studentAlertsRef.update({
+            items: FieldValue.arrayUnion(alertItem),
+          });
+        } else {
+          await studentAlertsRef.set({ items: [alertItem] }, { merge: true });
+        }
+        console.log(`✅ [SCAN] Created attendance_scan alert for student ${studentId} (${entry}) - push will be sent to student and linked parents`);
+      } catch (err) {
+        console.error(`❌ [SCAN] Failed to write student_alerts for ${studentId}:`, err.message);
+        continue;
+      }
+
+      // Write to each linked parent's parent_alerts so they see the alert in-app
+      try {
+        const parentIds = new Set();
+        const q1 = await firestore.collection('parent_student_links')
+          .where('studentId', '==', String(studentId))
+          .where('status', '==', 'active')
+          .get();
+        q1.docs.forEach((d) => {
+          const pid = d.data().parentIdNumber || d.data().parentId;
+          if (pid) parentIds.add(pid);
+        });
+        const studentDoc = await firestore.collection('users').doc(studentId).get();
+        const studentIdNumber = studentDoc.exists ? (studentDoc.data().studentId || studentId) : studentId;
+        const q2 = await firestore.collection('parent_student_links')
+          .where('studentIdNumber', '==', String(studentIdNumber))
+          .where('status', '==', 'active')
+          .get();
+        q2.docs.forEach((d) => {
+          const pid = d.data().parentIdNumber || d.data().parentId;
+          if (pid) parentIds.add(pid);
+        });
+
+        for (const parentId of parentIds) {
+          const parentAlertsRef = firestore.collection('parent_alerts').doc(parentId);
+          const parentSnap = await parentAlertsRef.get();
+          if (parentSnap.exists) {
+            await parentAlertsRef.update({
+              items: FieldValue.arrayUnion(alertItem),
+            });
+          } else {
+            await parentAlertsRef.set({ items: [alertItem] }, { merge: true });
+          }
+        }
+        if (parentIds.size > 0) {
+          console.log(`✅ [SCAN] Wrote attendance_scan to ${parentIds.size} parent_alerts for student ${studentId}`);
+        }
+      } catch (err) {
+        console.error(`❌ [SCAN] Failed to write parent_alerts for student ${studentId}:`, err.message);
+      }
+    }
+  }, (err) => {
+    console.error('Scans collection group listener error:', err);
+  });
+
+  alertListeners.scans = unsubscribe;
+  console.log('✅ Scan alerts listener initialized (student_attendances/*/scans)');
 };
 
 /**
@@ -1330,6 +1472,7 @@ const initializeAllAlertListeners = async () => {
   try {
     initializeAdminAlertsListener();
     initializeStudentAlertsListener();
+    initializeScanAlertsListener();
     initializeParentAlertsListener();
     initializeConversationMessagesListener();
     console.log('✅ All alert listeners initialized');
@@ -1370,6 +1513,10 @@ const cleanupAlertListeners = () => {
   if (alertListeners.conversations) {
     alertListeners.conversations();
     alertListeners.conversations = null;
+  }
+  if (alertListeners.scans) {
+    alertListeners.scans();
+    alertListeners.scans = null;
   }
   notifiedAlerts.clear();
 };
