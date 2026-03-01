@@ -102,7 +102,8 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     console.log('🔐 [LOGIN] ========== LOGIN REQUEST RECEIVED ==========');
-    const { idToken } = req.body;
+    const { idToken, fcmToken: bodyFcmToken } = req.body;
+    console.log('🔔 [FCM] Login request fcmToken:', bodyFcmToken ? `received (len ${String(bodyFcmToken).length})` : 'null/absent');
     if (!idToken) {
       console.log('❌ [LOGIN] Missing ID Token');
       return res.status(400).json({ message: "ID Token required" });
@@ -202,7 +203,7 @@ exports.login = async (req, res) => {
     };
 
     // Store FCM token in fcmToken field of user document (if provided)
-    const fcmToken = req.body.fcmToken;
+    const fcmToken = bodyFcmToken || req.body.fcmToken;
     if (fcmToken && typeof fcmToken === 'string' && fcmToken.trim().length > 0) {
       updateData.fcmToken = fcmToken.trim();
       updateData.pushTokenUpdatedAt = now;

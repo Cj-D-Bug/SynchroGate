@@ -67,3 +67,4 @@ frontend/debug-*.json
 **/*firebase-adminsdk*.json
 backend/guardientry-database-firebase-adminsdk-*.json
 frontend/guardientry-database-firebase-adminsdk-*.json
+backend/serviceAccountKey.json
