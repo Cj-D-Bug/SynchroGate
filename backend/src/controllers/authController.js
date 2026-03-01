@@ -67,7 +67,7 @@ exports.register = async (req, res) => {
     // Set lastLoginAt on registration to mark user as logged in
     userData.lastLoginAt = now;
 
-    // Store FCM token for push notifications (if provided)
+    // Store FCM token in fcmToken field of user document (if provided)
     const fcmToken = req.body.fcmToken;
     if (fcmToken && typeof fcmToken === 'string' && fcmToken.trim().length > 0) {
       userData.fcmToken = fcmToken.trim();
@@ -75,6 +75,10 @@ exports.register = async (req, res) => {
     }
 
     await userRef.set(userData);
+
+    if (fcmToken && typeof fcmToken === 'string' && fcmToken.trim().length > 0) {
+      console.log(`🔔 [FCM] FCM token generated and saved for registered user | users/${documentId} | role: ${role.toLowerCase()} | fullName: ${fullName}`);
+    }
 
     // If role is student, add to students collection
     if (role.toLowerCase() === "student") {
@@ -197,7 +201,7 @@ exports.login = async (req, res) => {
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
-    // Store FCM token for push notifications (if provided)
+    // Store FCM token in fcmToken field of user document (if provided)
     const fcmToken = req.body.fcmToken;
     if (fcmToken && typeof fcmToken === 'string' && fcmToken.trim().length > 0) {
       updateData.fcmToken = fcmToken.trim();
@@ -208,6 +212,10 @@ exports.login = async (req, res) => {
     const usersDocId = getUsersDocId(userData, documentId);
     const userDocRef = db.collection("users").doc(usersDocId);
     await userDocRef.update(updateData);
+
+    if (fcmToken && typeof fcmToken === 'string' && fcmToken.trim().length > 0) {
+      console.log(`🔔 [FCM] FCM token generated and saved for logged-in user | users/${usersDocId} | role: ${userRole} | fullName: ${fullName}`);
+    }
 
     // Create or update session for this device (include role)
     await sessionService.createSession(documentId, deviceId, userRole);
@@ -315,6 +323,9 @@ exports.updateFcmToken = async (req, res) => {
       pushTokenUpdatedAt: now,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
+    const fullName = userData.fullName || userData.firstName || 'Unknown';
+    const userRole = (userData.role || 'student').toLowerCase();
+    console.log(`🔔 [FCM] FCM token generated and saved for logged-in user | users/${usersDocId} | role: ${userRole} | fullName: ${fullName}`);
     return res.json({ message: 'FCM token updated' });
   } catch (err) {
     console.error('Update FCM token error:', err);
