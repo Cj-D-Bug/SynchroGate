@@ -24,10 +24,9 @@ const adminRoutes = require('./routes/adminRoutes');
 const scheduleRoutes = require('./routes/scheduleRoutes');
 const logRoutes = require('./routes/logRoutes');
 
-// Import alert push service (auto-sends push notifications when alerts change)
-const alertPushService = require('./services/alertPushService');
 // Import session service (tracks user sessions and enforces one device per user)
 const sessionService = require('./services/sessionService');
+const alertPushService = require('./services/alertPushService');
 
 const app = express();
 
@@ -130,16 +129,16 @@ process.on('unhandledRejection', (reason, promise) => {
 // Handle SIGTERM gracefully (Railway sends this when stopping)
 process.on('SIGTERM', () => {
   console.log('⚠️ SIGTERM received, shutting down gracefully...');
-  alertPushService.cleanupAlertListeners();
   sessionService.cleanupListener();
+  try { alertPushService.cleanupAlertListeners(); } catch (e) {}
   process.exit(0);
 });
 
 // Handle SIGINT gracefully
 process.on('SIGINT', () => {
   console.log('⚠️ SIGINT received, shutting down gracefully...');
-  alertPushService.cleanupAlertListeners();
   sessionService.cleanupListener();
+  try { alertPushService.cleanupAlertListeners(); } catch (e) {}
   process.exit(0);
 });
 
@@ -152,12 +151,11 @@ async function startServer() {
     // Firebase is already initialized in config/firebase.js
     console.log('✅ Firebase connected');
     
-    // Initialize alert push listeners (auto-send push notifications when alerts change)
-    // This works even when the app is closed because the backend is always running
-    await alertPushService.initializeAllAlertListeners();
-    
     // Initialize session listener (monitors user logins and enforces one device per user)
     sessionService.initializeUserLoginListener();
+
+    // Initialize push notification listeners (alerts, activity log, messages)
+    alertPushService.initializeAllAlertListeners();
 
     const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Server running on port ${PORT}`);

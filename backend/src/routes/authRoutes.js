@@ -36,4 +36,7 @@ router.post(
 // Logout route - requires authentication
 router.post("/logout", authMiddleware, authController.logout);
 
+// Update FCM token (authenticated) - call when push token is ready after login
+router.patch("/fcm-token", authMiddleware, authController.updateFcmToken);
+
 module.exports = router;

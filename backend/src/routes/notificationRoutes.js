@@ -6,14 +6,6 @@ const roleMiddleware = require('../middleware/roleMiddleware');
 
 const router = express.Router();
 
-// Admin & Developer can send push notification
-router.post(
-  '/push',
-  authMiddleware,
-  roleMiddleware(['admin', 'developer']),
-  notificationController.sendPushNotification
-);
-
 // Admin & Developer can send SMS notification
 router.post(
   '/sms',
@@ -44,14 +36,6 @@ router.post(
   authMiddleware,
   roleMiddleware(['admin', 'developer']),
   notificationController.logNotificationEvent
-);
-
-// Alert push notification endpoint (used by frontend for real-time alerts)
-// This endpoint doesn't require auth middleware because it's called internally
-// from the frontend when alerts are created/updated
-router.post(
-  '/alert-push',
-  notificationController.sendAlertPushNotification
 );
 
 module.exports = router;

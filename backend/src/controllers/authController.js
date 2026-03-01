@@ -6,7 +6,7 @@ const db = admin.firestore();
 
 // ===== REGISTER =====
 exports.register = async (req, res) => {
-  const { uid, fullName, email, role, linkedStudents, parentId, studentId, fcmToken } = req.body;
+  const { uid, fullName, email, role, linkedStudents, parentId, studentId } = req.body;
 
   try {
     if (!uid || !fullName || !email || !role) {
@@ -44,14 +44,14 @@ exports.register = async (req, res) => {
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
-    // Add FCM token if provided
+    // Set lastLoginAt on registration to mark user as logged in
+    userData.lastLoginAt = now;
+
+    // Store FCM token for push notifications (if provided)
+    const fcmToken = req.body.fcmToken;
     if (fcmToken && typeof fcmToken === 'string' && fcmToken.trim().length > 0) {
       userData.fcmToken = fcmToken.trim();
-      userData.pushTokenType = 'fcm';
       userData.pushTokenUpdatedAt = now;
-      // CRITICAL: Set lastLoginAt on registration to mark user as logged in
-      userData.lastLoginAt = now;
-      console.log(`✅ FCM token saved during registration for ${role} ${documentId}`);
     }
 
     await userRef.set(userData);
@@ -78,7 +78,7 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     console.log('🔐 [LOGIN] ========== LOGIN REQUEST RECEIVED ==========');
-    const { idToken, fcmToken } = req.body;
+    const { idToken } = req.body;
     if (!idToken) {
       console.log('❌ [LOGIN] Missing ID Token');
       return res.status(400).json({ message: "ID Token required" });
@@ -171,22 +171,20 @@ exports.login = async (req, res) => {
       console.log(`✅ [LOGIN] No existing session found for user ${documentId}. Allowing new login.`);
     }
 
-    // Update FCM token and lastLoginAt if provided
     const now = new Date().toISOString();
     const updateData = {
       lastLoginAt: now,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
-    // Update FCM token if provided
+    // Store FCM token for push notifications (if provided)
+    const fcmToken = req.body.fcmToken;
     if (fcmToken && typeof fcmToken === 'string' && fcmToken.trim().length > 0) {
       updateData.fcmToken = fcmToken.trim();
-      updateData.pushTokenType = 'fcm';
       updateData.pushTokenUpdatedAt = now;
-      console.log(`✅ FCM token updated during login for user ${documentId}`);
     }
 
-    // Update the user document with login timestamp and FCM token
+    // Update the user document with login timestamp
     const userDocRef = db.collection("users").doc(documentId);
     await userDocRef.update(updateData);
 
@@ -244,15 +242,14 @@ exports.logout = async (req, res) => {
     // Delete the session
     await sessionService.deleteSession(documentId);
 
-    // Clear FCM token and login timestamp so no push notifications are sent to this device
+    // Clear login timestamp and FCM token on logout
     try {
       await userDoc.ref.update({
-        fcmToken: null,
-        pushTokenType: null,
-        pushTokenUpdatedAt: null,
-        lastLoginAt: null,
+        lastLoginAt: admin.firestore.FieldValue.delete(),
+        fcmToken: admin.firestore.FieldValue.delete(),
+        pushTokenUpdatedAt: admin.firestore.FieldValue.delete(),
       });
-      console.log(`✅ [LOGOUT] FCM token and lastLoginAt cleared for user ${documentId}`);
+      console.log(`✅ [LOGOUT] lastLoginAt and FCM token cleared for user ${documentId}`);
     } catch (clearErr) {
       console.warn('⚠️ [LOGOUT] Failed to clear FCM token (non-blocking):', clearErr?.message);
     }
@@ -267,6 +264,34 @@ exports.logout = async (req, res) => {
   } catch (err) {
     console.error("❌ [LOGOUT ERROR]:", err);
     res.status(500).json({ error: "Server error" });
+  }
+};
+
+// ===== UPDATE FCM TOKEN =====
+exports.updateFcmToken = async (req, res) => {
+  try {
+    const uid = req.user.uid;
+    const { fcmToken } = req.body;
+    if (!fcmToken || typeof fcmToken !== 'string' || fcmToken.trim().length === 0) {
+      return res.status(400).json({ message: 'FCM token is required' });
+    }
+    const usersRef = db.collection('users');
+    const q = usersRef.where('uid', '==', uid);
+    const snapshot = await q.get();
+    if (snapshot.empty) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const docRef = snapshot.docs[0].ref;
+    const now = new Date().toISOString();
+    await docRef.update({
+      fcmToken: fcmToken.trim(),
+      pushTokenUpdatedAt: now,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    return res.json({ message: 'FCM token updated' });
+  } catch (err) {
+    console.error('Update FCM token error:', err);
+    return res.status(500).json({ error: 'Server error' });
   }
 };
 
