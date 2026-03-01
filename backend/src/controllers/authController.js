@@ -215,6 +215,8 @@ exports.login = async (req, res) => {
 
     if (fcmToken && typeof fcmToken === 'string' && fcmToken.trim().length > 0) {
       console.log(`🔔 [FCM] FCM token generated and saved for logged-in user | users/${usersDocId} | role: ${userRole} | fullName: ${fullName}`);
+    } else {
+      console.log(`⚠️ [FCM] Login successful but no FCM token received from client | users/${usersDocId} | role: ${userRole} | (client may be Expo Go or token generation failed)`);
     }
 
     // Create or update session for this device (include role)
