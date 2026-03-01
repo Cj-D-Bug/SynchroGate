@@ -4,6 +4,26 @@ const sessionService = require("../services/sessionService");
 // Firestore reference
 const db = admin.firestore();
 
+/**
+ * Resolve the users collection document ID for FCM token and profile writes.
+ * FCM token must be stored in the document named: parentId (parents), studentId (students), or "Admin"/"Developer".
+ */
+function getUsersDocId(userData, fallbackDocId) {
+  if (!userData) return fallbackDocId;
+  const role = String(userData.role || "").toLowerCase();
+  if (role === "parent") {
+    const pid = userData.parentId || userData.parentIdNumber;
+    return pid && String(pid).includes("-") ? String(pid).trim() : (fallbackDocId || pid);
+  }
+  if (role === "student") {
+    const sid = userData.studentId;
+    return sid ? String(sid).trim() : fallbackDocId;
+  }
+  if (role === "admin") return "Admin";
+  if (role === "developer") return "Developer";
+  return fallbackDocId;
+}
+
 // ===== REGISTER =====
 exports.register = async (req, res) => {
   const { uid, fullName, email, role, linkedStudents, parentId, studentId } = req.body;
@@ -17,7 +37,7 @@ exports.register = async (req, res) => {
       return res.status(403).json({ message: "Admin accounts cannot be self-registered" });
     }
 
-    // Use parent/student ID as document name instead of Firebase UID
+    // FCM token and user data are stored in the document named parentId (parents) or studentId (students) in users collection
     const documentId = role.toLowerCase() === "parent" ? parentId : studentId;
     
     if (!documentId) {
@@ -184,8 +204,9 @@ exports.login = async (req, res) => {
       updateData.pushTokenUpdatedAt = now;
     }
 
-    // Update the user document with login timestamp
-    const userDocRef = db.collection("users").doc(documentId);
+    // Update the user document by name: parentId, studentId, or Admin (where FCM token is stored)
+    const usersDocId = getUsersDocId(userData, documentId);
+    const userDocRef = db.collection("users").doc(usersDocId);
     await userDocRef.update(updateData);
 
     // Create or update session for this device (include role)
@@ -242,14 +263,15 @@ exports.logout = async (req, res) => {
     // Delete the session
     await sessionService.deleteSession(documentId);
 
-    // Clear login timestamp and FCM token on logout
+    // Clear login timestamp and FCM token from the document named parentId/studentId/Admin
+    const usersDocId = getUsersDocId(userData, documentId);
     try {
-      await userDoc.ref.update({
+      await db.collection("users").doc(usersDocId).update({
         lastLoginAt: admin.firestore.FieldValue.delete(),
         fcmToken: admin.firestore.FieldValue.delete(),
         pushTokenUpdatedAt: admin.firestore.FieldValue.delete(),
       });
-      console.log(`✅ [LOGOUT] lastLoginAt and FCM token cleared for user ${documentId}`);
+      console.log(`✅ [LOGOUT] lastLoginAt and FCM token cleared for user ${usersDocId}`);
     } catch (clearErr) {
       console.warn('⚠️ [LOGOUT] Failed to clear FCM token (non-blocking):', clearErr?.message);
     }
@@ -281,7 +303,12 @@ exports.updateFcmToken = async (req, res) => {
     if (snapshot.empty) {
       return res.status(404).json({ message: 'User not found' });
     }
-    const docRef = snapshot.docs[0].ref;
+    const userDoc = snapshot.docs[0];
+    const userData = userDoc.data();
+    const documentId = userDoc.id;
+    // Save FCM token in the document named parentId, studentId, or Admin
+    const usersDocId = getUsersDocId(userData, documentId);
+    const docRef = db.collection('users').doc(usersDocId);
     const now = new Date().toISOString();
     await docRef.update({
       fcmToken: fcmToken.trim(),
