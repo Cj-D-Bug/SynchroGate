@@ -61,7 +61,7 @@ app.get('/', (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({ 
     status: 'healthy',
-    service: 'GuardianEntry API',
+    service: 'Synchrogate API',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     memory: {
@@ -112,7 +112,10 @@ app.use((err, req, res, next) => {
   });
 });
 
-const PORT = process.env.PORT || 8000;
+// IMPORTANT (dev): Metro bundler typically uses 8081 on Android.
+// Keep the backend on a different port to avoid dev-build load failures.
+// Still overridable via PORT env (Railway, etc).
+const PORT = process.env.PORT || 8082;
 
 // Add process error handlers to prevent crashes
 process.on('uncaughtException', (error) => {
