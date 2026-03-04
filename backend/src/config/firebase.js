@@ -3,7 +3,10 @@ const { env } = require('./env');
 
 let serviceAccount;
 try {
-  serviceAccount = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT_JSON);
+  const raw = env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  const firstPass = JSON.parse(raw);
+  // Some platforms wrap JSON in quotes; handle "double-encoded" JSON.
+  serviceAccount = typeof firstPass === "string" ? JSON.parse(firstPass) : firstPass;
   console.log('✅ Firebase service account parsed successfully');
 } catch (error) {
   console.error('❌ Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON');

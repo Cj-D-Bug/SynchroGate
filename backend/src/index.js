@@ -112,10 +112,11 @@ app.use((err, req, res, next) => {
   });
 });
 
-// IMPORTANT (dev): Metro bundler typically uses 8081 on Android.
-// Keep the backend on a different port to avoid dev-build load failures.
-// Still overridable via PORT env (Railway, etc).
-const PORT = process.env.PORT || 8082;
+// NOTE: Some dev stacks (e.g. React Native Metro) also use 8081.
+// If you have a local port conflict, set PORT to something else.
+// Railway will inject its own PORT unless you override it.
+// Default to 8081 for local dev.
+const PORT = process.env.PORT || 8081;
 
 // Add process error handlers to prevent crashes
 process.on('uncaughtException', (error) => {
