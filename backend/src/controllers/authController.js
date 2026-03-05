@@ -80,7 +80,7 @@ exports.register = async (req, res) => {
       console.log(`🔔 [FCM] FCM token generated and saved for registered user | users/${documentId} | role: ${role.toLowerCase()} | fullName: ${fullName}`);
     }
 
-    // If role is student, add to students collection
+    // If role is student, add to students collection and create admin verification alert
     if (role.toLowerCase() === "student") {
       await db.collection("students").doc(studentId).set({
         studentId: studentId,
@@ -88,6 +88,32 @@ exports.register = async (req, res) => {
         qrCode: null,
         parentId: linkedStudents ? linkedStudents[0] : null,
       });
+
+      try {
+        const adminAlertsRef = db.collection('admin_alerts').doc('inbox');
+        const adminAlertsSnap = await adminAlertsRef.get();
+        const existingItems = adminAlertsSnap.exists
+          ? (Array.isArray(adminAlertsSnap.data()?.items) ? adminAlertsSnap.data().items : [])
+          : [];
+
+        const studentName = fullName || 'Student';
+        const verificationAlert = {
+          id: `student_verification_${studentId}_${Date.now()}`,
+          type: 'student_verification_pending',
+          title: 'Student Verification Required',
+          message: `${studentName} (${studentId}) has registered and needs verification. Please verify the student account to allow access.`,
+          createdAt: new Date().toISOString(),
+          status: 'unread',
+          studentId: studentId,
+          studentName: studentName,
+        };
+
+        const updatedItems = [verificationAlert, ...existingItems];
+        await adminAlertsRef.set({ items: updatedItems }, { merge: true });
+        console.log('✅ [REGISTER] Admin alert created for student verification:', verificationAlert.id);
+      } catch (alertError) {
+        console.error('❌ [REGISTER] Error creating admin alert for student verification:', alertError);
+      }
     }
 
     res.status(201).json({ message: "User registered successfully" });
@@ -211,6 +237,11 @@ exports.login = async (req, res) => {
     // Update the user document by name: parentId, studentId, or Admin (where FCM token is stored)
     const usersDocId = getUsersDocId(userData, documentId);
     const userDocRef = db.collection("users").doc(usersDocId);
+    // Ensure canonical Admin doc always has correct role/uid for push login checks
+    if (userRole === 'admin') {
+      updateData.role = 'admin';
+      updateData.uid = userData.uid || uid;
+    }
     await userDocRef.set(updateData, { merge: true });
 
     if (fcmToken && typeof fcmToken === 'string' && fcmToken.trim().length > 0) {
