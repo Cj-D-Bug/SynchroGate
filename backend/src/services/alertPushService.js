@@ -435,44 +435,11 @@ const initializeStudentAlertsListener = () => {
         const items = Array.isArray(change.doc.data()?.items) ? change.doc.data().items : [];
         const previousAlertIds = previousStudentAlerts.get(studentId) || new Set();
         
-        // Find new unread alerts
+        // Find new unread alerts (do not require createdAt; some clients write alerts without it)
         const newAlerts = items.filter(item => {
           const alertId = item.id || item.alertId;
-          if (item.status !== 'unread' || !alertId || previousAlertIds.has(alertId)) {
-            return false;
-          }
-          
-          // Extract timestamp
-          let alertTime = null;
-          try {
-            if (item.createdAt) {
-              if (typeof item.createdAt === 'string') {
-                alertTime = new Date(item.createdAt).getTime();
-              } else if (item.createdAt.toMillis) {
-                alertTime = item.createdAt.toMillis();
-              } else if (item.createdAt.seconds) {
-                alertTime = item.createdAt.seconds * 1000;
-              }
-            }
-            
-            if (!alertTime && typeof alertId === 'string' && alertId.includes('_')) {
-              const parts = alertId.split('_');
-              for (const part of parts) {
-                const num = parseInt(part, 10);
-                if (!isNaN(num) && num > 1000000000000) {
-                  alertTime = num;
-                  break;
-                }
-              }
-            }
-          } catch (e) {
-            // Ignore
-          }
-          
-          if (alertTime && alertTime > listenerStartTime) {
-            return true;
-          }
-          return false;
+          if (item.status !== 'unread' || !alertId || previousAlertIds.has(alertId)) return false;
+          return true;
         });
         
         const allCurrentAlertIds = new Set(items.map(item => item.id || item.alertId).filter(Boolean));
@@ -791,44 +758,11 @@ const initializeParentAlertsListener = () => {
         const items = Array.isArray(change.doc.data()?.items) ? change.doc.data().items : [];
         const previousAlertIds = previousParentAlerts.get(parentId) || new Set();
         
-        // Find new unread alerts
+        // Find new unread alerts (do not require createdAt; some clients write alerts without it)
         const newAlerts = items.filter(item => {
           const alertId = item.id || item.alertId;
-          if (item.status !== 'unread' || !alertId || previousAlertIds.has(alertId)) {
-            return false;
-          }
-          
-          // Extract timestamp
-          let alertTime = null;
-          try {
-            if (item.createdAt) {
-              if (typeof item.createdAt === 'string') {
-                alertTime = new Date(item.createdAt).getTime();
-              } else if (item.createdAt.toMillis) {
-                alertTime = item.createdAt.toMillis();
-              } else if (item.createdAt.seconds) {
-                alertTime = item.createdAt.seconds * 1000;
-              }
-            }
-            
-            if (!alertTime && typeof alertId === 'string' && alertId.includes('_')) {
-              const parts = alertId.split('_');
-              for (const part of parts) {
-                const num = parseInt(part, 10);
-                if (!isNaN(num) && num > 1000000000000) {
-                  alertTime = num;
-                  break;
-                }
-              }
-            }
-          } catch (e) {
-            // Ignore
-          }
-          
-          if (alertTime && alertTime > listenerStartTime) {
-            return true;
-          }
-          return false;
+          if (item.status !== 'unread' || !alertId || previousAlertIds.has(alertId)) return false;
+          return true;
         });
         
         const allCurrentAlertIds = new Set(items.map(item => item.id || item.alertId).filter(Boolean));
