@@ -281,12 +281,11 @@ const sendPushForAlert = async (alert, role, userId) => {
         return;
       }
       
-      // For attendance_scan alerts, use FCM token from link if available
+      // For attendance_scan alerts, use FCM token from link if available (prefer link over user doc)
       if (linkDocument && (alert.type === 'attendance_scan' || alert.alertType === 'attendance_scan')) {
         const linkData = linkDocument.data();
         const linkParentFcmToken = linkData?.parentFcmToken || null;
-        
-        if (linkParentFcmToken && userData.fcmToken) {
+        if (linkParentFcmToken) {
           const title = alert.title || 'New Alert';
           const body = alert.message || alert.body || 'You have a new alert';
           
@@ -590,9 +589,13 @@ const initializeStudentAlertsListener = () => {
           
           // CRITICAL: First, send push notification to the STUDENT themselves
           // This should happen regardless of whether there are linked parents
-          // Check if student is logged in and has FCM token
+          // Check if student is logged in and has FCM token (user doc or link doc fallback)
           if (isUserLoggedIn(studentDataCheck)) {
-            const studentFcmToken = studentDataCheck.fcmToken;
+            let studentFcmToken = studentDataCheck.fcmToken;
+            if (!studentFcmToken && linkedParents.length > 0) {
+              const fromLink = linkedParents[0].linkData?.studentFcmToken || null;
+              if (fromLink) studentFcmToken = fromLink;
+            }
             if (studentFcmToken) {
               try {
                 const alertId = alert.id || alert.alertId || `${studentId}_${Date.now()}`;

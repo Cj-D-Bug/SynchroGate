@@ -212,7 +212,7 @@ exports.login = async (req, res) => {
     // Update the user document by name: parentId, studentId, or Admin (where FCM token is stored)
     const usersDocId = getUsersDocId(userData, documentId);
     const userDocRef = db.collection("users").doc(usersDocId);
-    await userDocRef.update(updateData);
+    await userDocRef.set(updateData, { merge: true });
 
     if (fcmToken && typeof fcmToken === 'string' && fcmToken.trim().length > 0) {
       console.log(`🔔 [FCM] FCM token generated and saved for logged-in user | users/${usersDocId} | role: ${userRole} | fullName: ${fullName}`);
