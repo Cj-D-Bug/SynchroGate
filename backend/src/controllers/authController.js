@@ -135,15 +135,8 @@ exports.login = async (req, res) => {
     const deviceId = sessionService.getDeviceId(req);
     console.log(`🔐 [LOGIN] Device ID: ${deviceId.substring(0, 80)}...`);
 
-    // Check if there's an active session for this role (from a different user)
-    const roleSessionCheck = await sessionService.checkActiveSessionByRole(userRole);
-    console.log(`🔐 [LOGIN] Role session check (${userRole}): hasActiveSession=${roleSessionCheck.hasActiveSession}, existingUserId=${roleSessionCheck.existingUserId}`);
-    
-    if (roleSessionCheck.hasActiveSession && roleSessionCheck.existingUserId !== documentId) {
-      // Another user with the same role is already logged in
-      console.log(`⚠️ [LOGIN] Role ${userRole} already has an active session for user ${roleSessionCheck.existingUserId}. Invalidating to allow login for user ${documentId}`);
-      await sessionService.invalidateSession(roleSessionCheck.existingUserId);
-    }
+    // NOTE: We no longer enforce a global \"one user per role\" limit.
+    // Only per-account, per-device sessions are enforced below via checkActiveSession().
 
     // Check if user has an active session on a different device
     const sessionCheck = await sessionService.checkActiveSession(documentId);
