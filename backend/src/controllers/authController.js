@@ -138,55 +138,61 @@ exports.login = async (req, res) => {
     // NOTE: We no longer enforce a global \"one user per role\" limit.
     // Only per-account, per-device sessions are enforced below via checkActiveSession().
 
-    // Check if user has an active session on a different device
-    const sessionCheck = await sessionService.checkActiveSession(documentId);
-    const existingDeviceIdShort = sessionCheck.existingDeviceId ? sessionCheck.existingDeviceId.substring(0, 50) + '...' : 'null';
-    const currentDeviceIdShort = deviceId.substring(0, 50) + '...';
-    console.log(`🔐 [LOGIN] User session check: hasActiveSession=${sessionCheck.hasActiveSession}, existingDeviceId=${existingDeviceIdShort}, currentDeviceId=${currentDeviceIdShort}`);
-    
-    if (sessionCheck.hasActiveSession) {
-      if (sessionCheck.existingDeviceId === deviceId) {
-        // Same device - allow login and update session
-        console.log(`✅ [LOGIN] User ${documentId} (${userRole}) logging in from SAME device. Updating session.`);
-      } else {
-        // User is trying to login from a different device
-        // Reject the login attempt and return error
-        let loginTimeFormatted = 'unknown time';
-        try {
-          const loginTime = sessionCheck.loginTime;
-          if (loginTime) {
-            // Handle Firestore Timestamp
-            if (loginTime.toDate && typeof loginTime.toDate === 'function') {
-              loginTimeFormatted = loginTime.toDate().toLocaleString();
-            } else if (loginTime._seconds) {
-              // Firestore Timestamp with _seconds property
-              loginTimeFormatted = new Date(loginTime._seconds * 1000).toLocaleString();
-            } else {
-              // Regular date or ISO string
-              loginTimeFormatted = new Date(loginTime).toLocaleString();
+    // Per-account, per-device session enforcement:
+    // - Students/Admins/Developers: one device per account (strict)
+    // - Parents: ALLOW multiple devices per account (no SESSION_ACTIVE block)
+    if (userRole !== 'parent') {
+      const sessionCheck = await sessionService.checkActiveSession(documentId);
+      const existingDeviceIdShort = sessionCheck.existingDeviceId ? sessionCheck.existingDeviceId.substring(0, 50) + '...' : 'null';
+      const currentDeviceIdShort = deviceId.substring(0, 50) + '...';
+      console.log(`🔐 [LOGIN] User session check: hasActiveSession=${sessionCheck.hasActiveSession}, existingDeviceId=${existingDeviceIdShort}, currentDeviceId=${currentDeviceIdShort}`);
+      
+      if (sessionCheck.hasActiveSession) {
+        if (sessionCheck.existingDeviceId === deviceId) {
+          // Same device - allow login and update session
+          console.log(`✅ [LOGIN] User ${documentId} (${userRole}) logging in from SAME device. Updating session.`);
+        } else {
+          // User is trying to login from a different device
+          // Reject the login attempt and return error
+          let loginTimeFormatted = 'unknown time';
+          try {
+            const loginTime = sessionCheck.loginTime;
+            if (loginTime) {
+              // Handle Firestore Timestamp
+              if (loginTime.toDate && typeof loginTime.toDate === 'function') {
+                loginTimeFormatted = loginTime.toDate().toLocaleString();
+              } else if (loginTime._seconds) {
+                // Firestore Timestamp with _seconds property
+                loginTimeFormatted = new Date(loginTime._seconds * 1000).toLocaleString();
+              } else {
+                // Regular date or ISO string
+                loginTimeFormatted = new Date(loginTime).toLocaleString();
+              }
             }
+          } catch (timeError) {
+            console.warn('Error formatting login time:', timeError);
           }
-        } catch (timeError) {
-          console.warn('Error formatting login time:', timeError);
+          
+          console.log(`❌ ========== ACCOUNT ALREADY IN ACTIVE SESSION ==========`);
+          console.log(`❌ Student ID: ${documentId}`);
+          console.log(`❌ Name: ${fullName}`);
+          console.log(`❌ Role: ${userRole}`);
+          console.log(`❌ Active session device: ${sessionCheck.existingDeviceId?.substring(0, 60)}...`);
+          console.log(`❌ Active session since: ${loginTimeFormatted}`);
+          console.log(`❌ Attempted login from device: ${deviceId.substring(0, 60)}...`);
+          console.log(`❌ =======================================================`);
+          
+          return res.status(403).json({ 
+            message: "Account is currently in session on another device",
+            code: "SESSION_ACTIVE",
+            loginTime: loginTimeFormatted
+          });
         }
-        
-        console.log(`❌ ========== ACCOUNT ALREADY IN ACTIVE SESSION ==========`);
-        console.log(`❌ Student ID: ${documentId}`);
-        console.log(`❌ Name: ${fullName}`);
-        console.log(`❌ Role: ${userRole}`);
-        console.log(`❌ Active session device: ${sessionCheck.existingDeviceId?.substring(0, 60)}...`);
-        console.log(`❌ Active session since: ${loginTimeFormatted}`);
-        console.log(`❌ Attempted login from device: ${deviceId.substring(0, 60)}...`);
-        console.log(`❌ =======================================================`);
-        
-        return res.status(403).json({ 
-          message: "Account is currently in session on another device",
-          code: "SESSION_ACTIVE",
-          loginTime: loginTimeFormatted
-        });
+      } else {
+        console.log(`✅ [LOGIN] No existing session found for user ${documentId}. Allowing new login.`);
       }
     } else {
-      console.log(`✅ [LOGIN] No existing session found for user ${documentId}. Allowing new login.`);
+      console.log(`✅ [LOGIN] Parent account ${documentId} allowed to log in from multiple devices (no per-device limit).`);
     }
 
     const now = new Date().toISOString();
