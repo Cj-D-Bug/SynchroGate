@@ -43,9 +43,38 @@ exports.createStudent = async (req, res) => {
       createdAt: new Date(),
       updatedAt: new Date()
     };
-    
+
     const docRef = await firestore.collection('users').add(studentData);
-    res.status(201).json({ id: docRef.id, ...studentData });
+    const studentId = docRef.id;
+
+    // Save notification in admin_alerts collection, document named "inbox"
+    try {
+      const adminAlertsRef = firestore.collection('admin_alerts').doc('inbox');
+      const adminAlertsSnap = await adminAlertsRef.get();
+      const existingItems = adminAlertsSnap.exists
+        ? (Array.isArray(adminAlertsSnap.data()?.items) ? adminAlertsSnap.data().items : [])
+        : [];
+      const studentName = [studentData.firstName, studentData.lastName].filter(Boolean).join(' ').trim() || studentData.fullName || 'Student';
+      const verificationAlert = {
+        id: `student_verification_${studentId}_${Date.now()}`,
+        type: 'student_verification_pending',
+        title: 'Student Verification Required',
+        message: `${studentName} (${studentId}) has been added and may need verification.`,
+        createdAt: new Date().toISOString(),
+        status: 'unread',
+        studentId,
+        studentName,
+        yearLevel: studentData.yearLevel || '',
+        course: studentData.course || '',
+        section: studentData.section || '',
+      };
+      const updatedItems = [verificationAlert, ...existingItems];
+      await adminAlertsRef.set({ items: updatedItems }, { merge: true });
+    } catch (alertErr) {
+      console.error('Error creating admin alert for new student:', alertErr);
+    }
+
+    res.status(201).json({ id: studentId, ...studentData });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

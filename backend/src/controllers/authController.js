@@ -90,6 +90,7 @@ exports.register = async (req, res) => {
       });
 
       try {
+        // Save notification in admin_alerts collection, document named "inbox"
         const adminAlertsRef = db.collection('admin_alerts').doc('inbox');
         const adminAlertsSnap = await adminAlertsRef.get();
         const existingItems = adminAlertsSnap.exists
