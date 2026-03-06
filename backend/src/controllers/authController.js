@@ -245,7 +245,6 @@ exports.login = async (req, res) => {
     }
 
     // Update the user document by name: parentId, studentId, or Admin (where FCM token is stored)
-    const usersDocId = getUsersDocId(userData, documentId);
     const userDocRef = db.collection("users").doc(usersDocId);
     // Ensure canonical Admin doc always has correct role/uid for push login checks
     if (userRole === 'admin') {
