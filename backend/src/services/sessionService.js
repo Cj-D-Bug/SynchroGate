@@ -4,8 +4,9 @@ const { firestore, admin } = require('../config/firebase');
 // In-memory cache for active sessions (userId -> { deviceId, loginTime, lastActivity, role })
 const activeSessions = new Map();
 
-// Firestore collection name for sessions
+// Firestore collection name for sessions and users
 const SESSIONS_COLLECTION = 'user_sessions';
+const USERS_COLLECTION = 'users';
 
 /**
  * Get or create a device ID from request headers
@@ -45,11 +46,45 @@ const getDeviceId = (req) => {
 };
 
 /**
- * Check if user has an active session on a different device
+ * Check if the user document still has lastLoginAt set (user considered logged in).
+ * When user logs out, lastLoginAt is cleared (backend or frontend). If it's missing,
+ * any session in user_sessions is stale and should not block new logins.
+ */
+const isUserDocLoggedIn = async (userId) => {
+  try {
+    const userDoc = await firestore.collection(USERS_COLLECTION).doc(userId).get();
+    if (!userDoc.exists) return false;
+    const data = userDoc.data();
+    const lastLoginAt = data?.lastLoginAt;
+    if (lastLoginAt == null || lastLoginAt === '') return false;
+    if (typeof lastLoginAt?.toDate === 'function') return true; // Firestore Timestamp
+    return true; // string or other truthy value
+  } catch (e) {
+    console.warn('❌ Error checking user doc lastLoginAt:', e?.message);
+    return true; // On error, assume logged in so we don't allow duplicate sessions
+  }
+};
+
+/**
+ * Check if user has an active session on a different device.
+ * A session is only considered active if (1) it exists and is not time-expired, and
+ * (2) the user document still has lastLoginAt set (logout clears it). This fixes
+ * the case where logout ran on the client (clearing lastLoginAt) but backend logout
+ * failed, leaving a stale session doc that would incorrectly block login.
  * Returns { hasActiveSession: boolean, existingDeviceId: string | null }
  */
 const checkActiveSession = async (userId) => {
   try {
+    const clearStaleSession = async () => {
+      activeSessions.delete(userId);
+      try {
+        await firestore.collection(SESSIONS_COLLECTION).doc(userId).delete();
+        console.log(`✅ [SESSION] Cleared stale session for user ${userId} (user doc has no lastLoginAt)`);
+      } catch (e) {
+        console.warn('⚠️ [SESSION] Failed to delete stale session doc:', e?.message);
+      }
+    };
+
     // Check in-memory cache first
     const cachedSession = activeSessions.get(userId);
     if (cachedSession) {
@@ -67,6 +102,11 @@ const checkActiveSession = async (userId) => {
         const isExpired = Date.now() - lastActivity.getTime() > sessionTimeout;
         
         if (!isExpired) {
+          const stillLoggedIn = await isUserDocLoggedIn(userId);
+          if (!stillLoggedIn) {
+            await clearStaleSession();
+            return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null };
+          }
           return {
             hasActiveSession: true,
             existingDeviceId: sessionData.deviceId,
@@ -97,6 +137,11 @@ const checkActiveSession = async (userId) => {
       const isExpired = Date.now() - lastActivity.getTime() > sessionTimeout;
 
       if (!isExpired) {
+        const stillLoggedIn = await isUserDocLoggedIn(userId);
+        if (!stillLoggedIn) {
+          await clearStaleSession();
+          return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null };
+        }
         // Update cache
         activeSessions.set(userId, {
           deviceId: sessionData.deviceId,
@@ -114,6 +159,7 @@ const checkActiveSession = async (userId) => {
       } else {
         // Expired session, delete it
         await firestore.collection(SESSIONS_COLLECTION).doc(userId).delete();
+        activeSessions.delete(userId);
       }
     }
 
