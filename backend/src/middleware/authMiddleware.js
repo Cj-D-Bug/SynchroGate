@@ -70,6 +70,23 @@ module.exports = async function authMiddleware(req, res, next) {
           message: "Unauthorized: You are logged in on another device. Please log out from that device first." 
         });
       }
+      // When session has deviceModel, require X-Device-Model header to match (same deviceId can collide for different devices on same network)
+      const sessionDeviceModel = sessionCheck.existingDeviceModel && String(sessionCheck.existingDeviceModel).trim();
+      const headerDeviceModel = req.headers['x-device-model'] && String(req.headers['x-device-model']).trim();
+      if (sessionDeviceModel) {
+        if (!headerDeviceModel) {
+          console.log(`⚠️ Unauthorized: Session is tied to device "${sessionDeviceModel}" but request missing X-Device-Model header`);
+          return res.status(401).json({
+            message: "Unauthorized: Device identification required. Please log in again.",
+          });
+        }
+        if (headerDeviceModel !== sessionDeviceModel) {
+          console.log(`⚠️ Unauthorized access attempt: User ${documentId} session on device "${sessionDeviceModel}", request from device "${headerDeviceModel}"`);
+          return res.status(401).json({
+            message: "Unauthorized: You are logged in on another device. Please log out from that device first.",
+          });
+        }
+      }
 
       // Update session activity on valid request
       await sessionService.updateActivity(documentId);

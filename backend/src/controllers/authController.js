@@ -181,7 +181,13 @@ exports.login = async (req, res) => {
       console.log(`🔐 [LOGIN] User session check: hasActiveSession=${sessionCheck.hasActiveSession}, existing=${existingLabel}, current=${currentLabel}`);
       
       if (sessionCheck.hasActiveSession) {
-        if (sessionCheck.existingDeviceId === deviceId) {
+        const sameDeviceId = sessionCheck.existingDeviceId === deviceId;
+        // When both session and request have deviceModel, they must match (server-derived deviceId can collide for different devices on same network)
+        const existingModel = sessionCheck.existingDeviceModel && String(sessionCheck.existingDeviceModel).trim();
+        const currentModel = deviceModel && String(deviceModel).trim();
+        const sameDeviceModel = !existingModel || !currentModel ? true : (existingModel === currentModel);
+        const sameDevice = sameDeviceId && sameDeviceModel;
+        if (sameDevice) {
           // Same device - allow login and update session
           console.log(`✅ [LOGIN] User ${documentId} (${userRole}) logging in from SAME device. Updating session.`);
         } else {
