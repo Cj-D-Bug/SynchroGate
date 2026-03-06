@@ -129,7 +129,7 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     console.log('🔐 [LOGIN] ========== LOGIN REQUEST RECEIVED ==========');
-    const { idToken, fcmToken: bodyFcmToken } = req.body;
+    const { idToken, fcmToken: bodyFcmToken, deviceModel: bodyDeviceModel } = req.body;
     console.log('🔔 [FCM] Login request fcmToken:', bodyFcmToken ? `received (len ${String(bodyFcmToken).length})` : 'null/absent');
     if (!idToken) {
       console.log('❌ [LOGIN] Missing ID Token');
@@ -158,21 +158,27 @@ exports.login = async (req, res) => {
     
     console.log(`🔐 [LOGIN] User found - ID: ${documentId}, Role: ${userRole}, Name: ${fullName}`);
 
-    // Get device ID from request
+    // Get device ID from request; optional deviceModel from client for clearer logs/UI
     const deviceId = sessionService.getDeviceId(req);
-    console.log(`🔐 [LOGIN] Device ID: ${deviceId.substring(0, 80)}...`);
+    const deviceModel = bodyDeviceModel && String(bodyDeviceModel).trim() ? String(bodyDeviceModel).trim().substring(0, 120) : null;
+    const deviceLabel = deviceModel ? `${deviceModel} (${deviceId.substring(0, 40)}...)` : deviceId.substring(0, 80) + '...';
+    console.log(`🔐 [LOGIN] Device: ${deviceLabel}`);
 
     // NOTE: We no longer enforce a global \"one user per role\" limit.
     // Only per-account, per-device sessions are enforced below via checkActiveSession().
+
+    const usersDocId = getUsersDocId(userData, documentId);
 
     // Per-account, per-device session enforcement:
     // - Students/Admins/Developers: one device per account (strict)
     // - Parents: ALLOW multiple devices per account (no SESSION_ACTIVE block)
     if (userRole !== 'parent') {
-      const sessionCheck = await sessionService.checkActiveSession(documentId);
-      const existingDeviceIdShort = sessionCheck.existingDeviceId ? sessionCheck.existingDeviceId.substring(0, 50) + '...' : 'null';
-      const currentDeviceIdShort = deviceId.substring(0, 50) + '...';
-      console.log(`🔐 [LOGIN] User session check: hasActiveSession=${sessionCheck.hasActiveSession}, existingDeviceId=${existingDeviceIdShort}, currentDeviceId=${currentDeviceIdShort}`);
+      const sessionCheck = await sessionService.checkActiveSession(documentId, usersDocId);
+      const existingLabel = sessionCheck.existingDeviceModel
+        ? `${sessionCheck.existingDeviceModel} (${sessionCheck.existingDeviceId?.substring(0, 40)}...)`
+        : (sessionCheck.existingDeviceId ? sessionCheck.existingDeviceId.substring(0, 50) + '...' : 'null');
+      const currentLabel = deviceModel ? `${deviceModel} (${deviceId.substring(0, 40)}...)` : deviceId.substring(0, 50) + '...';
+      console.log(`🔐 [LOGIN] User session check: hasActiveSession=${sessionCheck.hasActiveSession}, existing=${existingLabel}, current=${currentLabel}`);
       
       if (sessionCheck.hasActiveSession) {
         if (sessionCheck.existingDeviceId === deviceId) {
@@ -200,19 +206,22 @@ exports.login = async (req, res) => {
             console.warn('Error formatting login time:', timeError);
           }
           
+          const existingDeviceLabel = sessionCheck.existingDeviceModel || sessionCheck.existingDeviceId?.substring(0, 60) + '...';
+          const attemptedDeviceLabel = deviceModel || deviceId.substring(0, 60) + '...';
           console.log(`❌ ========== ACCOUNT ALREADY IN ACTIVE SESSION ==========`);
-          console.log(`❌ Student ID: ${documentId}`);
+          console.log(`❌ User ID: ${documentId}`);
           console.log(`❌ Name: ${fullName}`);
           console.log(`❌ Role: ${userRole}`);
-          console.log(`❌ Active session device: ${sessionCheck.existingDeviceId?.substring(0, 60)}...`);
+          console.log(`❌ Active session device: ${existingDeviceLabel}`);
           console.log(`❌ Active session since: ${loginTimeFormatted}`);
-          console.log(`❌ Attempted login from device: ${deviceId.substring(0, 60)}...`);
+          console.log(`❌ Attempted login from device: ${attemptedDeviceLabel}`);
           console.log(`❌ =======================================================`);
           
           return res.status(403).json({ 
             message: "Account is currently in session on another device",
             code: "SESSION_ACTIVE",
-            loginTime: loginTimeFormatted
+            loginTime: loginTimeFormatted,
+            activeDeviceModel: sessionCheck.existingDeviceModel || undefined,
           });
         }
       } else {
@@ -251,19 +260,19 @@ exports.login = async (req, res) => {
       console.log(`⚠️ [FCM] Login successful but no FCM token received from client | users/${usersDocId} | role: ${userRole} | (client may be Expo Go or token generation failed)`);
     }
 
-    // Create or update session for this device (include role)
-    await sessionService.createSession(documentId, deviceId, userRole);
-    console.log(`✅ [LOGIN] Session created/updated for user ${documentId} (role: ${userRole}) on device ${deviceId.substring(0, 50)}...`);
+    // Create or update session for this device (include role and optional device model)
+    await sessionService.createSession(documentId, deviceId, userRole, deviceModel);
+    console.log(`✅ [LOGIN] Session created/updated for user ${documentId} (role: ${userRole}) on device ${deviceLabel}`);
 
     // Get updated user data
     const updatedUserDoc = await userDocRef.get();
     const updatedUserData = updatedUserDoc.data();
 
     console.log(`✅ ========== LOGGED IN SUCCESSFUL ==========`);
-    console.log(`✅ Student ID: ${documentId}`);
+    console.log(`✅ User ID: ${documentId}`);
     console.log(`✅ Name: ${fullName}`);
     console.log(`✅ Role: ${userRole}`);
-    console.log(`✅ Device: ${deviceId.substring(0, 60)}...`);
+    console.log(`✅ Device: ${deviceLabel}`);
     console.log(`✅ ==========================================`);
     
     res.json({

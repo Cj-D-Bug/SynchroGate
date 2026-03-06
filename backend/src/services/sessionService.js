@@ -53,12 +53,17 @@ const getDeviceId = (req) => {
 const isUserDocLoggedIn = async (userId) => {
   try {
     const userDoc = await firestore.collection(USERS_COLLECTION).doc(userId).get();
-    if (!userDoc.exists) return false;
+    if (!userDoc.exists) {
+      console.log(`🔐 [SESSION] users/${userId} doc missing, treating as not logged in`);
+      return false;
+    }
     const data = userDoc.data();
     const lastLoginAt = data?.lastLoginAt;
-    if (lastLoginAt == null || lastLoginAt === '') return false;
-    if (typeof lastLoginAt?.toDate === 'function') return true; // Firestore Timestamp
-    return true; // string or other truthy value
+    if (lastLoginAt == null || lastLoginAt === '') {
+      console.log(`🔐 [SESSION] users/${userId} lastLoginAt is empty/null → treating session as stale (user logged out)`);
+      return false;
+    }
+    return true; // Firestore Timestamp or string
   } catch (e) {
     console.warn('❌ Error checking user doc lastLoginAt:', e?.message);
     return true; // On error, assume logged in so we don't allow duplicate sessions
@@ -71,15 +76,18 @@ const isUserDocLoggedIn = async (userId) => {
  * (2) the user document still has lastLoginAt set (logout clears it). This fixes
  * the case where logout ran on the client (clearing lastLoginAt) but backend logout
  * failed, leaving a stale session doc that would incorrectly block login.
- * Returns { hasActiveSession: boolean, existingDeviceId: string | null }
+ * @param {string} userId - Session key (documentId from users query)
+ * @param {string} [usersDocId] - Document ID in users collection where lastLoginAt is stored (e.g. getUsersDocId). If omitted, userId is used.
+ * Returns { hasActiveSession: boolean, existingDeviceId: string | null, existingDeviceModel?: string }
  */
-const checkActiveSession = async (userId) => {
+const checkActiveSession = async (userId, usersDocId) => {
+  const loginCheckDocId = usersDocId != null && usersDocId !== '' ? usersDocId : userId;
   try {
     const clearStaleSession = async () => {
       activeSessions.delete(userId);
       try {
         await firestore.collection(SESSIONS_COLLECTION).doc(userId).delete();
-        console.log(`✅ [SESSION] Cleared stale session for user ${userId} (user doc has no lastLoginAt)`);
+        console.log(`✅ [SESSION] Cleared stale session for user ${userId} (users/${loginCheckDocId} has no lastLoginAt)`);
       } catch (e) {
         console.warn('⚠️ [SESSION] Failed to delete stale session doc:', e?.message);
       }
@@ -102,14 +110,15 @@ const checkActiveSession = async (userId) => {
         const isExpired = Date.now() - lastActivity.getTime() > sessionTimeout;
         
         if (!isExpired) {
-          const stillLoggedIn = await isUserDocLoggedIn(userId);
+          const stillLoggedIn = await isUserDocLoggedIn(loginCheckDocId);
           if (!stillLoggedIn) {
             await clearStaleSession();
-            return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null };
+            return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null, existingDeviceModel: null };
           }
           return {
             hasActiveSession: true,
             existingDeviceId: sessionData.deviceId,
+            existingDeviceModel: sessionData.deviceModel || null,
             loginTime: sessionData.loginTime,
             role: sessionData.role,
             existingUserId: userId,
@@ -137,14 +146,15 @@ const checkActiveSession = async (userId) => {
       const isExpired = Date.now() - lastActivity.getTime() > sessionTimeout;
 
       if (!isExpired) {
-        const stillLoggedIn = await isUserDocLoggedIn(userId);
+        const stillLoggedIn = await isUserDocLoggedIn(loginCheckDocId);
         if (!stillLoggedIn) {
           await clearStaleSession();
-          return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null };
+          return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null, existingDeviceModel: null };
         }
         // Update cache
         activeSessions.set(userId, {
           deviceId: sessionData.deviceId,
+          deviceModel: sessionData.deviceModel,
           loginTime: sessionData.loginTime,
           lastActivity: lastActivity,
           role: sessionData.role,
@@ -152,6 +162,7 @@ const checkActiveSession = async (userId) => {
         return {
           hasActiveSession: true,
           existingDeviceId: sessionData.deviceId,
+          existingDeviceModel: sessionData.deviceModel || null,
           loginTime: sessionData.loginTime,
           role: sessionData.role,
           existingUserId: userId,
@@ -163,23 +174,25 @@ const checkActiveSession = async (userId) => {
       }
     }
 
-    return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null };
+    return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null, existingDeviceModel: null };
   } catch (error) {
     console.error('❌ Error checking active session:', error);
-    return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null };
+    return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null, existingDeviceModel: null };
   }
 };
 
 /**
  * Create or update a user session
+ * @param {string} [deviceModel] - Optional human-readable device model (e.g. "Pixel 7", "iPhone 14") for logs and UI
  */
-const createSession = async (userId, deviceId, role) => {
+const createSession = async (userId, deviceId, role, deviceModel) => {
   try {
     const now = new Date();
     const sessionData = {
       userId,
       deviceId,
       role: role ? role.toLowerCase() : null,
+      deviceModel: deviceModel && String(deviceModel).trim() ? String(deviceModel).trim().substring(0, 120) : null,
       loginTime: admin.firestore.FieldValue.serverTimestamp(),
       lastActivity: admin.firestore.FieldValue.serverTimestamp(),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -190,12 +203,14 @@ const createSession = async (userId, deviceId, role) => {
     // Update cache
     activeSessions.set(userId, {
       deviceId,
+      deviceModel: sessionData.deviceModel,
       loginTime: now,
       lastActivity: now,
       role: role ? role.toLowerCase() : null,
     });
 
-    console.log(`✅ Session created for user ${userId} (role: ${role}) on device ${deviceId}`);
+    const deviceLabel = sessionData.deviceModel ? `${sessionData.deviceModel} (${deviceId.substring(0, 40)}...)` : deviceId;
+    console.log(`✅ Session created for user ${userId} (role: ${role}) on device ${deviceLabel}`);
   } catch (error) {
     console.error('❌ Error creating session:', error);
     throw error;
@@ -457,12 +472,12 @@ const initializeUserLoginListener = () => {
             const sessionCheck = await checkActiveSession(userId);
             
             if (sessionCheck.hasActiveSession) {
-              // Account already in active session
+              const devLabel = sessionCheck.existingDeviceModel || sessionCheck.existingDeviceId?.substring(0, 60) + '...';
               console.log(`❌ ========== ACCOUNT ALREADY IN ACTIVE SESSION ==========`);
-              console.log(`❌ Student ID: ${userId}`);
+              console.log(`❌ User ID: ${userId}`);
               console.log(`❌ Name: ${fullName}`);
               console.log(`❌ Role: ${userRole}`);
-              console.log(`❌ Active session device: ${sessionCheck.existingDeviceId?.substring(0, 60)}...`);
+              console.log(`❌ Active session device: ${devLabel}`);
               console.log(`❌ =======================================================`);
             } else {
               // Successful login
