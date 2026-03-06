@@ -154,6 +154,9 @@ async function startServer() {
     
     // Firebase is already initialized in config/firebase.js
     console.log('✅ Firebase connected');
+
+    // Clear active admin sessions first (enforce one-device-per-admin with new deviceModel logic)
+    await sessionService.clearAdminSessions();
     
     // Initialize session listener (monitors user logins and enforces one device per user)
     sessionService.initializeUserLoginListener();

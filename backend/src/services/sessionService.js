@@ -329,6 +329,34 @@ const checkActiveSessionByRole = async (role) => {
 };
 
 /**
+ * Clear all active admin sessions (one-time cleanup for enforcing one-device-per-admin).
+ * Deletes user_sessions/Admin and clears in-memory cache so admins can log in fresh.
+ */
+const clearAdminSessions = async () => {
+  try {
+    const adminSessionRef = firestore.collection(SESSIONS_COLLECTION).doc('Admin');
+    const adminSessionDoc = await adminSessionRef.get();
+    if (adminSessionDoc.exists) {
+      await adminSessionRef.delete();
+      activeSessions.delete('Admin');
+      console.log('✅ [SESSION] Cleared active admin session');
+    }
+    // Also clear users/Admin lastLoginAt so admin is fully logged out
+    const adminUserRef = firestore.collection(USERS_COLLECTION).doc('Admin');
+    const adminUserDoc = await adminUserRef.get();
+    if (adminUserDoc.exists) {
+      await adminUserRef.update({
+        lastLoginAt: admin.firestore.FieldValue.delete(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.log('✅ [SESSION] Cleared lastLoginAt for Admin user');
+    }
+  } catch (error) {
+    console.warn('⚠️ [SESSION] Error clearing admin sessions:', error?.message);
+  }
+};
+
+/**
  * Cleanup expired sessions from Firestore
  * Runs periodically to remove sessions that haven't been active for 24+ hours
  */
@@ -550,6 +578,7 @@ module.exports = {
   updateActivity,
   deleteSession,
   invalidateSession,
+  clearAdminSessions,
   initializeUserLoginListener,
   cleanupListener,
 };
