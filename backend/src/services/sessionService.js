@@ -329,30 +329,25 @@ const checkActiveSessionByRole = async (role) => {
 };
 
 /**
- * Clear all active admin sessions (one-time cleanup for enforcing one-device-per-admin).
- * Deletes user_sessions/Admin and clears in-memory cache so admins can log in fresh.
+ * Clear all active sessions (admin, student, parent) on server restart.
+ * Deletes all user_sessions documents and clears in-memory cache so users log in fresh.
  */
-const clearAdminSessions = async () => {
+const clearAllSessions = async () => {
   try {
-    const adminSessionRef = firestore.collection(SESSIONS_COLLECTION).doc('Admin');
-    const adminSessionDoc = await adminSessionRef.get();
-    if (adminSessionDoc.exists) {
-      await adminSessionRef.delete();
-      activeSessions.delete('Admin');
-      console.log('✅ [SESSION] Cleared active admin session');
+    const sessionsSnapshot = await firestore.collection(SESSIONS_COLLECTION).get();
+    let deletedCount = 0;
+    const batch = firestore.batch();
+    for (const doc of sessionsSnapshot.docs) {
+      batch.delete(doc.ref);
+      activeSessions.delete(doc.id);
+      deletedCount++;
     }
-    // Also clear users/Admin lastLoginAt so admin is fully logged out
-    const adminUserRef = firestore.collection(USERS_COLLECTION).doc('Admin');
-    const adminUserDoc = await adminUserRef.get();
-    if (adminUserDoc.exists) {
-      await adminUserRef.update({
-        lastLoginAt: admin.firestore.FieldValue.delete(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      console.log('✅ [SESSION] Cleared lastLoginAt for Admin user');
+    if (deletedCount > 0) {
+      await batch.commit();
+      console.log(`✅ [SESSION] Cleared ${deletedCount} active session(s) on server restart`);
     }
   } catch (error) {
-    console.warn('⚠️ [SESSION] Error clearing admin sessions:', error?.message);
+    console.warn('⚠️ [SESSION] Error clearing sessions:', error?.message);
   }
 };
 
@@ -578,7 +573,7 @@ module.exports = {
   updateActivity,
   deleteSession,
   invalidateSession,
-  clearAdminSessions,
+  clearAllSessions,
   initializeUserLoginListener,
   cleanupListener,
 };

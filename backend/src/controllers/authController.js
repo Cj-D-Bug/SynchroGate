@@ -129,7 +129,7 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     console.log('🔐 [LOGIN] ========== LOGIN REQUEST RECEIVED ==========');
-    const { idToken, fcmToken: bodyFcmToken, deviceModel: bodyDeviceModel } = req.body;
+    const { idToken, fcmToken: bodyFcmToken, deviceModel: bodyDeviceModel, deviceSerial: bodyDeviceSerial } = req.body;
     console.log('🔔 [FCM] Login request fcmToken:', bodyFcmToken ? `received (len ${String(bodyFcmToken).length})` : 'null/absent');
     if (!idToken) {
       console.log('❌ [LOGIN] Missing ID Token');
@@ -158,10 +158,13 @@ exports.login = async (req, res) => {
     
     console.log(`🔐 [LOGIN] User found - ID: ${documentId}, Role: ${userRole}, Name: ${fullName}`);
 
-    // Get device ID from request; optional deviceModel from client for clearer logs/UI
+    // Get device ID from request; optional deviceModel and deviceSerial from client for clearer logs/UI
     const deviceId = sessionService.getDeviceId(req);
     const deviceModel = bodyDeviceModel && String(bodyDeviceModel).trim() ? String(bodyDeviceModel).trim().substring(0, 120) : null;
-    const deviceLabel = deviceModel ? `${deviceModel} (${deviceId.substring(0, 40)}...)` : deviceId.substring(0, 80) + '...';
+    const deviceSerial = bodyDeviceSerial && String(bodyDeviceSerial).trim() ? String(bodyDeviceSerial).trim().substring(0, 64) : null;
+    const deviceLabel = deviceModel
+      ? (deviceSerial ? `${deviceModel} | serial: ${deviceSerial} (${deviceId.substring(0, 40)}...)` : `${deviceModel} (${deviceId.substring(0, 40)}...)`)
+      : (deviceSerial ? `${deviceId.substring(0, 40)}... | serial: ${deviceSerial}` : deviceId.substring(0, 80) + '...');
     console.log(`🔐 [LOGIN] Device: ${deviceLabel}`);
 
     // NOTE: We no longer enforce a global \"one user per role\" limit.
