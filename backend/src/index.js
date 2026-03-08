@@ -91,8 +91,9 @@ app.get('/api', (req, res) => {
   });
 });
 
-// Public route: parent verification by token (no auth)
+// Public routes: verification by token (no auth)
 app.get('/api/verify-parent', adminController.verifyParentByToken);
+app.get('/api/verify-student', adminController.verifyStudentByToken);
 
 // Mount routes with /api prefix
 app.use('/api/auth', authRoutes);

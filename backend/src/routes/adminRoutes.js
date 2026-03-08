@@ -15,6 +15,7 @@ router.use(roleMiddleware(['admin', 'developer']));
 router.get('/users', adminController.getUsers);
 router.post('/generate-qr', adminController.generateQRForUser);
 router.post('/parent/send-verification-email', adminController.sendParentVerificationEmail);
+router.post('/student/send-verification-email', adminController.sendStudentVerificationEmail);
 // router.get('/reports', adminController.getReports); // Method doesn't exist yet
 
 // Developer-only routes - using logController methods
