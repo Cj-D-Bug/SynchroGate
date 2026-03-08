@@ -51,7 +51,9 @@ module.exports = async function authMiddleware(req, res, next) {
 
     // Verify session is valid (user is logged in on this device)
     // Note: Login endpoint doesn't use this middleware, so session check happens in login controller
-    if (documentId) {
+    // Exception: admin and developer can proceed without session (e.g. backend login failed during app login)
+    const isAdminOrDeveloper = role === 'admin' || role === 'developer';
+    if (documentId && !isAdminOrDeveloper) {
       const deviceId = sessionService.getDeviceId(req);
       const sessionCheck = await sessionService.checkActiveSession(documentId);
       
