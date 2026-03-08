@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { firestore } = require('../config/firebase');
 const { generateQRCodeImage } = require('../utils/generateQR');
 const { env } = require('../config/env');
+const pushService = require('../services/pushService');
 
 exports.getUsers = async (req, res) => {
   try {
@@ -140,13 +141,31 @@ exports.sendParentVerificationEmail = async (req, res) => {
     }
 
     const verificationUrlFinal = verificationUrl || `${env.APP_BASE_URL || ''}/api/verify-parent?token=${token}`;
+
+    // Best-effort: send push notification to parent that verification link is ready
+    try {
+      const parentFcm = String(parentData.fcmToken || '').trim();
+      if (parentFcm) {
+        const parentName = [parentData.firstName, parentData.lastName].filter(Boolean).join(' ').trim() || 'Parent';
+        const title = 'Parent verification link sent';
+        const body = `An admin sent your verification link. Open SyncroGate and tap "Verify now" to activate your account.`;
+        await pushService.sendPush(parentFcm, title, body, {
+          type: 'parent_verification_sent',
+          parentId,
+          email,
+          parentName,
+        });
+      }
+    } catch (e) {
+      console.warn('Failed to send parent verification push (non-blocking):', e?.message);
+    }
+
+    const baseMessage = 'Verification request sent. Parent can now verify from their pending dashboard.';
     res.status(200).json({
       success: true,
       emailSent,
       verificationUrl: verificationUrlFinal,
-      message: emailSent
-        ? 'Verification email sent to parent. They can tap the link in the email to verify.'
-        : 'SMTP not configured. Add SMTP_HOST, SMTP_USER, SMTP_PASS and VERIFICATION_BASE_URL to backend .env (see .env.example for Gmail). Until then, copy the link below and send it to the parent.',
+      message: baseMessage,
     });
   } catch (err) {
     console.error('Error sending parent verification:', err);
