@@ -91,37 +91,29 @@ exports.sendParentVerificationEmail = async (req, res) => {
       used: false,
     });
 
+    // Save token on parent user doc so they can verify in-app even if SMTP fails
+    try {
+      await firestore.collection('users').doc(parentId).set({
+        parentVerificationToken: token,
+        parentVerificationTokenCreatedAt: new Date().toISOString(),
+      }, { merge: true });
+    } catch (e) {
+      console.warn('Failed to store parent verification token on user doc (non-blocking):', e?.message);
+    }
+
     const baseUrl = (env.VERIFICATION_BASE_URL || env.APP_BASE_URL || '').replace(/\/$/, '');
     const verificationUrl = baseUrl
       ? `${baseUrl}/api/verify-parent?token=${token}`
       : null;
     const isLocalhost = !baseUrl || /localhost|127\.0\.0\.1/i.test(baseUrl);
-    const parentName = [parentData.firstName, parentData.lastName].filter(Boolean).join(' ').trim() || 'Parent';
-    const emailHtml = `<p>Hello ${parentName},</p><p>An administrator has requested that you verify your parent account. Tap the link below to verify and start using the parent dashboard:</p><p><a href="${verificationUrl}">${verificationUrl}</a></p><p>This link expires in 24 hours. If you did not request this, you can ignore this email.</p><p>— SyncroGate</p>`;
-    const emailText = `Hello ${parentName},\n\nAn administrator has requested that you verify your parent account. Tap the link below to verify and start using the parent dashboard:\n\n${verificationUrl}\n\nThis link expires in 24 hours. If you did not request this, you can ignore this email.\n\n— SyncroGate`;
 
     let emailSent = false;
-
-    // Try Resend first (works on Railway; no SMTP timeout)
-    if (env.RESEND_API_KEY && verificationUrl && !isLocalhost) {
-      try {
-        const { Resend } = require('resend');
-        const resend = new Resend(env.RESEND_API_KEY);
-        const { error } = await resend.emails.send({
-          from: env.RESEND_FROM || 'SyncroGate <onboarding@resend.dev>',
-          to: [email],
-          subject: 'SyncroGate – Verify your parent account',
-          html: emailHtml,
-        });
-        if (error) throw new Error(error.message);
-        emailSent = true;
-      } catch (resendErr) {
-        console.error('Parent verification email (Resend) failed:', resendErr.message);
-      }
+    if (!env.SMTP_HOST || !env.SMTP_USER || !env.SMTP_PASS) {
+      console.log('⚠️ Parent verification: SMTP not configured. Add SMTP_HOST, SMTP_USER, SMTP_PASS to .env (see .env.example for Gmail setup).');
+    } else if (isLocalhost) {
+      console.log('⚠️ Parent verification: VERIFICATION_BASE_URL is localhost. Set VERIFICATION_BASE_URL to your public backend URL (e.g. https://your-api.railway.app) so the link works when the parent taps it.');
     }
-
-    // Fallback to SMTP if Resend failed or not configured
-    if (!emailSent && env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS && verificationUrl && !isLocalhost) {
+    if (env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS && verificationUrl && !isLocalhost) {
       try {
         const nodemailer = require('nodemailer');
         const transporter = nodemailer.createTransport({
@@ -129,23 +121,22 @@ exports.sendParentVerificationEmail = async (req, res) => {
           port: Number(env.SMTP_PORT) || 587,
           secure: env.SMTP_SECURE === 'true',
           auth: { user: env.SMTP_USER, pass: env.SMTP_PASS },
+          connectionTimeout: 10000,
+          greetingTimeout: 10000,
+          socketTimeout: 15000,
         });
+        const parentName = [parentData.firstName, parentData.lastName].filter(Boolean).join(' ').trim() || 'Parent';
         await transporter.sendMail({
           from: env.SMTP_FROM || env.SMTP_USER,
           to: email,
           subject: 'SyncroGate – Verify your parent account',
-          text: emailText,
-          html: emailHtml,
+          text: `Hello ${parentName},\n\nAn administrator has requested that you verify your parent account. Tap the link below to verify and start using the parent dashboard:\n\n${verificationUrl}\n\nThis link expires in 24 hours. If you did not request this, you can ignore this email.\n\n— SyncroGate`,
+          html: `<p>Hello ${parentName},</p><p>An administrator has requested that you verify your parent account. Tap the link below to verify and start using the parent dashboard:</p><p><a href="${verificationUrl}">${verificationUrl}</a></p><p>This link expires in 24 hours. If you did not request this, you can ignore this email.</p><p>— SyncroGate</p>`,
         });
         emailSent = true;
       } catch (mailErr) {
-        console.error('Parent verification email (SMTP) failed:', mailErr.message);
+        console.error('Parent verification email send failed:', mailErr.message);
       }
-    }
-
-    if (!emailSent) {
-      if (!env.RESEND_API_KEY) console.log('⚠️ Parent verification: Add RESEND_API_KEY in Railway Variables (resend.com) for automatic email.');
-      else if (isLocalhost) console.log('⚠️ Parent verification: Set VERIFICATION_BASE_URL to your public backend URL (e.g. https://your-api.railway.app).');
     }
 
     const verificationUrlFinal = verificationUrl || `${env.APP_BASE_URL || ''}/api/verify-parent?token=${token}`;
@@ -170,31 +161,37 @@ exports.verifyParentByToken = async (req, res) => {
 
   try {
     const token = (req.query.token || req.body?.token || '').trim();
+    const wantsJson = String(req.query.json || '').trim() === '1' || String(req.headers.accept || '').includes('application/json');
     if (!token) {
+      if (wantsJson) return res.status(400).json({ success: false, error: 'Token is required' });
       res.setHeader('Content-Type', 'text/html');
       return res.status(400).send(htmlError('Invalid link. Token is missing.'));
     }
 
     const tokenDoc = await firestore.collection('parent_verification_tokens').doc(token).get();
     if (!tokenDoc.exists) {
+      if (wantsJson) return res.status(404).json({ success: false, error: 'Invalid or expired link' });
       res.setHeader('Content-Type', 'text/html');
       return res.status(404).send(htmlError('Invalid or expired link. Please request a new verification email from the admin.'));
     }
 
     const data = tokenDoc.data();
     if (data.used) {
+      if (wantsJson) return res.status(400).json({ success: false, error: 'This link has already been used' });
       res.setHeader('Content-Type', 'text/html');
       return res.status(400).send(htmlError('This link has already been used. Your account is already verified.'));
     }
 
     const expiresAt = data.expiresAt ? new Date(data.expiresAt) : null;
     if (expiresAt && expiresAt < new Date()) {
+      if (wantsJson) return res.status(400).json({ success: false, error: 'This link has expired' });
       res.setHeader('Content-Type', 'text/html');
       return res.status(400).send(htmlError('This link has expired. Please request a new verification email from the admin.'));
     }
 
     const parentId = data.parentId;
     if (!parentId) {
+      if (wantsJson) return res.status(400).json({ success: false, error: 'Invalid token data' });
       res.setHeader('Content-Type', 'text/html');
       return res.status(400).send(htmlError('Invalid token data.'));
     }
@@ -202,22 +199,50 @@ exports.verifyParentByToken = async (req, res) => {
     const userRef = firestore.collection('users').doc(parentId);
     const userSnap = await userRef.get();
     if (!userSnap.exists) {
+      if (wantsJson) return res.status(404).json({ success: false, error: 'Parent account not found' });
       res.setHeader('Content-Type', 'text/html');
       return res.status(404).send(htmlError('Parent account not found.'));
     }
 
+    const parentData = userSnap.data() || {};
     await userRef.update({
       verificationStatus: 'verified',
       isVerify: true,
+      parentVerificationToken: null,
       updatedAt: new Date().toISOString(),
     });
 
     await firestore.collection('parent_verification_tokens').doc(token).update({ used: true });
 
+    // Write admin activity log (push will be sent by backend listener)
+    try {
+      const activityLogRef = firestore.collection('admin_activity_logs').doc('global');
+      const activitySnap = await activityLogRef.get();
+      const existing = activitySnap.exists ? (Array.isArray(activitySnap.data()?.items) ? activitySnap.data().items : []) : [];
+      const parentName = [parentData.firstName, parentData.lastName].filter(Boolean).join(' ').trim() || parentData.email || 'Parent';
+      const newItem = {
+        id: `parent_verified_${parentId}_${Date.now()}`,
+        type: 'parent_verified',
+        title: 'Parent Account Verified',
+        message: `${parentName} (${parentId}) verified their parent account.`,
+        createdAt: new Date().toISOString(),
+        status: 'unread',
+        parent: { id: parentId, email: parentData.email || '', firstName: parentData.firstName || '', lastName: parentData.lastName || '' },
+      };
+      await activityLogRef.set({ items: [newItem, ...existing] }, { merge: true });
+    } catch (e) {
+      console.warn('Failed to write parent_verified activity log (non-blocking):', e?.message);
+    }
+
+    if (wantsJson) {
+      return res.status(200).json({ success: true, message: 'Your account has been verified. You can now use the parent dashboard.' });
+    }
     res.setHeader('Content-Type', 'text/html');
     res.status(200).send(htmlSuccess('Your parent account has been verified successfully.'));
   } catch (err) {
     console.error('Error verifying parent by token:', err);
+    const wantsJson = String(req.query.json || '').trim() === '1' || String(req.headers.accept || '').includes('application/json');
+    if (wantsJson) return res.status(500).json({ success: false, error: err.message || 'Verification failed' });
     res.setHeader('Content-Type', 'text/html');
     res.status(500).send(htmlError('Verification failed. Please try again or contact support.'));
   }

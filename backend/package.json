@@ -24,7 +24,6 @@
     "mysql2": "^3.14.3",
     "node-fetch": "^2.7.0",
     "qrcode": "^1.5.4",
-    "resend": "^4.0.0",
     "react-native-dotenv": "^3.4.11",
     "sequelize": "^6.37.7",
     "twilio": "^5.8.0"

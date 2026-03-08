@@ -94,10 +94,8 @@ const env = {
 
   APP_BASE_URL: process.env.APP_BASE_URL || `http://localhost:${process.env.PORT || 8081}`,
 
-  // Optional: parent verification email (Resend works on Railway; Gmail SMTP often times out)
+  // Optional: parent verification email
   VERIFICATION_BASE_URL: process.env.VERIFICATION_BASE_URL || process.env.APP_BASE_URL || "",
-  RESEND_API_KEY: process.env.RESEND_API_KEY || "",
-  RESEND_FROM: process.env.RESEND_FROM || "SyncroGate <onboarding@resend.dev>",
   SMTP_HOST: process.env.SMTP_HOST || "",
   SMTP_PORT: process.env.SMTP_PORT || "587",
   SMTP_SECURE: process.env.SMTP_SECURE || "false",

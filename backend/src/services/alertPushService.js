@@ -174,12 +174,13 @@ const sendPushForAlert = async (alert, role, userId) => {
       const hasParentId = !!(alert.parentId || alert.parent_id);
       const hasStudentId = !!(alert.studentId || alert.student_id);
       
-      // SPECIAL CASE: qr_request and student_verification_pending alerts can have studentId (they're FROM students TO admins)
+      // SPECIAL CASE: qr_request, student_verification_pending, parent_verification_pending can include studentId/parentId (they're FROM users TO admins)
       const isQrRequest = alertType.toLowerCase() === 'qr_request';
       const isStudentVerification = alertType.toLowerCase() === 'student_verification_pending';
+      const isParentVerification = alertType.toLowerCase() === 'parent_verification_pending';
       
       // For non-exception alerts, reject if they have parentId or studentId
-      if (!isQrRequest && !isStudentVerification && (hasParentId || hasStudentId)) {
+      if (!isQrRequest && !isStudentVerification && !isParentVerification && (hasParentId || hasStudentId)) {
         console.log(`⏭️ [${role}] SKIP - admin alert has parentId (${hasParentId}) or studentId (${hasStudentId}) - this is a parent/student alert`);
         return;
       }
@@ -191,8 +192,8 @@ const sendPushForAlert = async (alert, role, userId) => {
       ];
       const isParentStudentType = parentStudentAlertTypes.some(t => alertType.toLowerCase().includes(t.toLowerCase()));
       
-      // Allow qr_request and student_verification_pending even if they're in the list (they're exceptions)
-      if (isParentStudentType && !isQrRequest && !isStudentVerification) {
+      // Allow qr_request, student_verification_pending, parent_verification_pending even if they're in the list (they're exceptions)
+      if (isParentStudentType && !isQrRequest && !isStudentVerification && !isParentVerification) {
         console.log(`⏭️ [${role}] SKIP - alert type "${alertType}" is a parent/student alert type, not an admin alert`);
         return;
       }
@@ -203,6 +204,10 @@ const sendPushForAlert = async (alert, role, userId) => {
       
       if (isStudentVerification) {
         console.log(`✅ [${role}] Student verification alert verified - will send to admin users`);
+      }
+
+      if (isParentVerification) {
+        console.log(`✅ [${role}] Parent verification alert verified - will send to admin users`);
       }
     }
     
@@ -938,15 +943,16 @@ const initializeAdminAlertsListener = () => {
         const alertType = alert.type || alert.alertType || '';
         const isQrRequest = alertType.toLowerCase() === 'qr_request';
         const isStudentVerification = alertType.toLowerCase() === 'student_verification_pending';
+        const isParentVerification = alertType.toLowerCase() === 'parent_verification_pending';
         
-        // For qr_request and student_verification_pending, allow studentId (they're FROM student TO admin)
+        // For qr_request, student_verification_pending, parent_verification_pending, allow studentId/parentId (they're FROM user TO admin)
         // For other alerts, verify they don't have parentId/studentId
-        if (!isQrRequest && !isStudentVerification) {
+        if (!isQrRequest && !isStudentVerification && !isParentVerification) {
           const hasParentId = !!(alert.parentId || alert.parent_id);
           const hasStudentId = !!(alert.studentId || alert.student_id);
           
           if (hasParentId || hasStudentId) {
-            console.log(`⏭️ [ADMIN LISTENER] CRITICAL: Skipping alert ${alert.id || alert.alertId} - has parentId/studentId (not qr_request or student_verification_pending)`);
+            console.log(`⏭️ [ADMIN LISTENER] CRITICAL: Skipping alert ${alert.id || alert.alertId} - has parentId/studentId (not qr_request/student_verification_pending/parent_verification_pending)`);
             continue;
           }
           
