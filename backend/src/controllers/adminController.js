@@ -96,14 +96,32 @@ exports.sendParentVerificationEmail = async (req, res) => {
       ? `${baseUrl}/api/verify-parent?token=${token}`
       : null;
     const isLocalhost = !baseUrl || /localhost|127\.0\.0\.1/i.test(baseUrl);
+    const parentName = [parentData.firstName, parentData.lastName].filter(Boolean).join(' ').trim() || 'Parent';
+    const emailHtml = `<p>Hello ${parentName},</p><p>An administrator has requested that you verify your parent account. Tap the link below to verify and start using the parent dashboard:</p><p><a href="${verificationUrl}">${verificationUrl}</a></p><p>This link expires in 24 hours. If you did not request this, you can ignore this email.</p><p>— SyncroGate</p>`;
+    const emailText = `Hello ${parentName},\n\nAn administrator has requested that you verify your parent account. Tap the link below to verify and start using the parent dashboard:\n\n${verificationUrl}\n\nThis link expires in 24 hours. If you did not request this, you can ignore this email.\n\n— SyncroGate`;
 
     let emailSent = false;
-    if (!env.SMTP_HOST || !env.SMTP_USER || !env.SMTP_PASS) {
-      console.log('⚠️ Parent verification: SMTP not configured. Add SMTP_HOST, SMTP_USER, SMTP_PASS to .env (see .env.example for Gmail setup).');
-    } else if (isLocalhost) {
-      console.log('⚠️ Parent verification: VERIFICATION_BASE_URL is localhost. Set VERIFICATION_BASE_URL to your public backend URL (e.g. https://your-api.railway.app) so the link works when the parent taps it.');
+
+    // Try Resend first (works on Railway; no SMTP timeout)
+    if (env.RESEND_API_KEY && verificationUrl && !isLocalhost) {
+      try {
+        const { Resend } = require('resend');
+        const resend = new Resend(env.RESEND_API_KEY);
+        const { error } = await resend.emails.send({
+          from: env.RESEND_FROM || 'SyncroGate <onboarding@resend.dev>',
+          to: [email],
+          subject: 'SyncroGate – Verify your parent account',
+          html: emailHtml,
+        });
+        if (error) throw new Error(error.message);
+        emailSent = true;
+      } catch (resendErr) {
+        console.error('Parent verification email (Resend) failed:', resendErr.message);
+      }
     }
-    if (env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS && verificationUrl && !isLocalhost) {
+
+    // Fallback to SMTP if Resend failed or not configured
+    if (!emailSent && env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS && verificationUrl && !isLocalhost) {
       try {
         const nodemailer = require('nodemailer');
         const transporter = nodemailer.createTransport({
@@ -112,18 +130,22 @@ exports.sendParentVerificationEmail = async (req, res) => {
           secure: env.SMTP_SECURE === 'true',
           auth: { user: env.SMTP_USER, pass: env.SMTP_PASS },
         });
-        const parentName = [parentData.firstName, parentData.lastName].filter(Boolean).join(' ').trim() || 'Parent';
         await transporter.sendMail({
           from: env.SMTP_FROM || env.SMTP_USER,
           to: email,
           subject: 'SyncroGate – Verify your parent account',
-          text: `Hello ${parentName},\n\nAn administrator has requested that you verify your parent account. Tap the link below to verify and start using the parent dashboard:\n\n${verificationUrl}\n\nThis link expires in 24 hours. If you did not request this, you can ignore this email.\n\n— SyncroGate`,
-          html: `<p>Hello ${parentName},</p><p>An administrator has requested that you verify your parent account. Tap the link below to verify and start using the parent dashboard:</p><p><a href="${verificationUrl}">${verificationUrl}</a></p><p>This link expires in 24 hours. If you did not request this, you can ignore this email.</p><p>— SyncroGate</p>`,
+          text: emailText,
+          html: emailHtml,
         });
         emailSent = true;
       } catch (mailErr) {
-        console.error('Parent verification email send failed:', mailErr.message);
+        console.error('Parent verification email (SMTP) failed:', mailErr.message);
       }
+    }
+
+    if (!emailSent) {
+      if (!env.RESEND_API_KEY) console.log('⚠️ Parent verification: Add RESEND_API_KEY in Railway Variables (resend.com) for automatic email.');
+      else if (isLocalhost) console.log('⚠️ Parent verification: Set VERIFICATION_BASE_URL to your public backend URL (e.g. https://your-api.railway.app).');
     }
 
     const verificationUrlFinal = verificationUrl || `${env.APP_BASE_URL || ''}/api/verify-parent?token=${token}`;
