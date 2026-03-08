@@ -95,9 +95,15 @@ exports.sendParentVerificationEmail = async (req, res) => {
     const verificationUrl = baseUrl
       ? `${baseUrl}/api/verify-parent?token=${token}`
       : null;
+    const isLocalhost = !baseUrl || /localhost|127\.0\.0\.1/i.test(baseUrl);
 
     let emailSent = false;
-    if (env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS && verificationUrl) {
+    if (!env.SMTP_HOST || !env.SMTP_USER || !env.SMTP_PASS) {
+      console.log('⚠️ Parent verification: SMTP not configured. Add SMTP_HOST, SMTP_USER, SMTP_PASS to .env (see .env.example for Gmail setup).');
+    } else if (isLocalhost) {
+      console.log('⚠️ Parent verification: VERIFICATION_BASE_URL is localhost. Set VERIFICATION_BASE_URL to your public backend URL (e.g. https://your-api.railway.app) so the link works when the parent taps it.');
+    }
+    if (env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS && verificationUrl && !isLocalhost) {
       try {
         const nodemailer = require('nodemailer');
         const transporter = nodemailer.createTransport({
@@ -120,13 +126,14 @@ exports.sendParentVerificationEmail = async (req, res) => {
       }
     }
 
+    const verificationUrlFinal = verificationUrl || `${env.APP_BASE_URL || ''}/api/verify-parent?token=${token}`;
     res.status(200).json({
       success: true,
       emailSent,
-      verificationUrl: verificationUrl || `${env.APP_BASE_URL || ''}/api/verify-parent?token=${token}`,
+      verificationUrl: verificationUrlFinal,
       message: emailSent
-        ? 'Verification email sent to parent.'
-        : 'Verification link created. Send the link to the parent\'s email manually if SMTP is not configured.',
+        ? 'Verification email sent to parent. They can tap the link in the email to verify.'
+        : 'SMTP not configured. Add SMTP_HOST, SMTP_USER, SMTP_PASS and VERIFICATION_BASE_URL to backend .env (see .env.example for Gmail). Until then, copy the link below and send it to the parent.',
     });
   } catch (err) {
     console.error('Error sending parent verification:', err);
@@ -134,38 +141,47 @@ exports.sendParentVerificationEmail = async (req, res) => {
   }
 };
 
-/** Public: verify parent by token (from email link). No auth required. */
+/** Public: verify parent by token (from email link). No auth required. Returns HTML for browser. */
 exports.verifyParentByToken = async (req, res) => {
+  const htmlSuccess = (msg) => `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SyncroGate – Verified</title><style>body{font-family:system-ui,sans-serif;max-width:480px;margin:60px auto;padding:24px;text-align:center;background:#f9fafb}h1{color:#16a34a;font-size:24px}p{color:#374151;line-height:1.6}.btn{display:inline-block;margin-top:16px;padding:12px 24px;background:#004f89;color:#fff;text-decoration:none;border-radius:8px;font-weight:600}</style></head><body><h1>✓ Account Verified</h1><p>${msg}</p><p>Open the SyncroGate app to use the parent dashboard.</p></body></html>`;
+  const htmlError = (msg) => `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SyncroGate – Error</title><style>body{font-family:system-ui,sans-serif;max-width:480px;margin:60px auto;padding:24px;text-align:center;background:#f9fafb}h1{color:#dc2626;font-size:24px}p{color:#374151;line-height:1.6}</style></head><body><h1>Verification Failed</h1><p>${msg}</p></body></html>`;
+
   try {
     const token = (req.query.token || req.body?.token || '').trim();
     if (!token) {
-      return res.status(400).json({ success: false, error: 'Token is required' });
+      res.setHeader('Content-Type', 'text/html');
+      return res.status(400).send(htmlError('Invalid link. Token is missing.'));
     }
 
     const tokenDoc = await firestore.collection('parent_verification_tokens').doc(token).get();
     if (!tokenDoc.exists) {
-      return res.status(404).json({ success: false, error: 'Invalid or expired link' });
+      res.setHeader('Content-Type', 'text/html');
+      return res.status(404).send(htmlError('Invalid or expired link. Please request a new verification email from the admin.'));
     }
 
     const data = tokenDoc.data();
     if (data.used) {
-      return res.status(400).json({ success: false, error: 'This link has already been used' });
+      res.setHeader('Content-Type', 'text/html');
+      return res.status(400).send(htmlError('This link has already been used. Your account is already verified.'));
     }
 
     const expiresAt = data.expiresAt ? new Date(data.expiresAt) : null;
     if (expiresAt && expiresAt < new Date()) {
-      return res.status(400).json({ success: false, error: 'This link has expired' });
+      res.setHeader('Content-Type', 'text/html');
+      return res.status(400).send(htmlError('This link has expired. Please request a new verification email from the admin.'));
     }
 
     const parentId = data.parentId;
     if (!parentId) {
-      return res.status(400).json({ success: false, error: 'Invalid token data' });
+      res.setHeader('Content-Type', 'text/html');
+      return res.status(400).send(htmlError('Invalid token data.'));
     }
 
     const userRef = firestore.collection('users').doc(parentId);
     const userSnap = await userRef.get();
     if (!userSnap.exists) {
-      return res.status(404).json({ success: false, error: 'Parent account not found' });
+      res.setHeader('Content-Type', 'text/html');
+      return res.status(404).send(htmlError('Parent account not found.'));
     }
 
     await userRef.update({
@@ -176,12 +192,11 @@ exports.verifyParentByToken = async (req, res) => {
 
     await firestore.collection('parent_verification_tokens').doc(token).update({ used: true });
 
-    res.status(200).json({
-      success: true,
-      message: 'Your account has been verified. You can now use the parent dashboard.',
-    });
+    res.setHeader('Content-Type', 'text/html');
+    res.status(200).send(htmlSuccess('Your parent account has been verified successfully.'));
   } catch (err) {
     console.error('Error verifying parent by token:', err);
-    res.status(500).json({ success: false, error: err.message || 'Verification failed' });
+    res.setHeader('Content-Type', 'text/html');
+    res.status(500).send(htmlError('Verification failed. Please try again or contact support.'));
   }
 };
