@@ -21,6 +21,7 @@ const studentRoutes = require('./routes/studentRoutes');
 const attendanceRoutes = require('./routes/attendanceRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const adminController = require('./controllers/adminController');
 const scheduleRoutes = require('./routes/scheduleRoutes');
 const logRoutes = require('./routes/logRoutes');
 
@@ -89,6 +90,9 @@ app.get('/api', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+// Public route: parent verification by token (no auth)
+app.get('/api/verify-parent', adminController.verifyParentByToken);
 
 // Mount routes with /api prefix
 app.use('/api/auth', authRoutes);
