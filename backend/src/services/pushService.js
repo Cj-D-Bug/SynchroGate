@@ -1,6 +1,74 @@
 // pushService.js - Send push notifications using Firebase Cloud Messaging (FCM)
-// Works with Railway backend and Expo/React Native FCM tokens
+// Works with Railway backend and Expo/React Native push tokens
 const { admin } = require('../config/firebase');
+const { env } = require('../config/env');
+
+function isExpoPushToken(token) {
+  if (!token || typeof token !== 'string') return false;
+  return token.trim().startsWith('ExponentPushToken');
+}
+
+async function sendExpoPushNotification(expoPushToken, title, body, data = {}) {
+  if (!expoPushToken || typeof expoPushToken !== 'string' || expoPushToken.trim().length === 0) {
+    throw new Error('Invalid Expo push token provided');
+  }
+  const token = expoPushToken.trim();
+  if (!isExpoPushToken(token)) {
+    throw new Error('Not an Expo push token');
+  }
+  if (!env.EXPO_PUSH_KEY) {
+    throw new Error('EXPO_PUSH_KEY not configured on backend');
+  }
+  if (typeof fetch !== 'function') {
+    throw new Error('Global fetch is not available (Node 18+ required for Expo push).');
+  }
+
+  const payload = {
+    to: token,
+    title: title || 'Notification',
+    body: body || '',
+    sound: 'default',
+    data: {
+      ...Object.keys(data).reduce((acc, key) => {
+        acc[key] = data[key];
+        return acc;
+      }, {}),
+      title: String(title || 'Notification'),
+      body: String(body || ''),
+    },
+  };
+
+  const res = await fetch('https://exp.host/--/api/v2/push/send', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Accept-Encoding': 'gzip, deflate',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${env.EXPO_PUSH_KEY}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const text = await res.text();
+  let json = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch (_) {}
+
+  if (!res.ok) {
+    const msg = json?.errors?.[0]?.message || json?.error || text || `Expo push failed (${res.status})`;
+    throw new Error(msg);
+  }
+
+  const status = json?.data?.status || json?.status || 'ok';
+  if (status !== 'ok') {
+    const details = json?.data?.message || json?.data?.details || json?.message || 'Unknown Expo push error';
+    throw new Error(String(details));
+  }
+
+  console.log('✅ Expo push sent:', { status, id: json?.data?.id });
+  return { success: true, provider: 'expo', token, response: json };
+}
 
 /**
  * Send push notification using FCM
@@ -19,6 +87,11 @@ const sendPushNotification = async (fcmToken, title, body, data = {}) => {
     // Allow typical FCM length and Expo tokens (e.g. ExponentPushToken[...])
     if (token.length < 20 || token.length > 500) {
       throw new Error('FCM token length is invalid');
+    }
+
+    // Expo Go / Expo push tokens must be sent via Expo push API, not Firebase Admin.
+    if (isExpoPushToken(token)) {
+      return await sendExpoPushNotification(token, title, body, data);
     }
 
     const message = {
@@ -64,7 +137,7 @@ const sendPushNotification = async (fcmToken, title, body, data = {}) => {
 
     const response = await admin.messaging().send(message);
     console.log('✅ FCM push sent:', response);
-    return { success: true, messageId: response, token };
+    return { success: true, provider: 'fcm', messageId: response, token };
   } catch (err) {
     console.error('❌ FCM push failed:', err.message);
     throw err;
