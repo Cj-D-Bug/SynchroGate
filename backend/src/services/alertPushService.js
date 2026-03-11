@@ -26,6 +26,11 @@ const isUnlinkAlertType = (alert) => {
   return t.includes('unlink') || t.includes('unlinked') || id.includes('unlink') || id.includes('unlinked');
 };
 
+const isLinkRequestAlertType = (alert) => {
+  const t = String(alert?.type || alert?.alertType || '').toLowerCase();
+  return t === 'link_request';
+};
+
 const shouldNotifyLinkedParentsForStudentAlert = (alert) => {
   const t = String(alert?.type || alert?.alertType || '').toLowerCase();
   // Safety-first: only fan out to parents for known "parent relevant" events.
@@ -301,11 +306,11 @@ const sendPushForAlert = async (alert, role, userId) => {
         return;
       }
 
-      // Unlink alerts must notify the parent even though the link may already be removed.
-      if (isUnlinkAlertType(alert)) {
+      // Unlink & link_request alerts must notify the parent even when the link is not yet active
+      if (isUnlinkAlertType(alert) || isLinkRequestAlertType(alert)) {
         // Allow sending without active-link verification.
         // Still restricted by parentId match above + logged-in checks.
-        console.log(`ℹ️ [${role}] Unlink alert detected - bypassing active link check for parent ${userId}`);
+        console.log(`ℹ️ [${role}] ${isUnlinkAlertType(alert) ? 'Unlink' : 'Link request'} alert detected - bypassing active link check for parent ${userId}`);
       } else {
       
       // Try to find active link
