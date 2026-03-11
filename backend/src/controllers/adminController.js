@@ -12,6 +12,15 @@ const sendMailWithTimeout = async (transporter, mailOptions, timeoutMs = 3000) =
   ]);
 };
 
+const docExists = (snap) => {
+  if (!snap) return false;
+  // firebase-admin uses boolean `exists`; firebase web SDK uses function `exists()`
+  try {
+    if (typeof snap.exists === 'function') return !!snap.exists();
+  } catch {}
+  return !!snap.exists;
+};
+
 exports.getUsers = async (req, res) => {
   try {
     const usersSnapshot = await firestore.collection('users').get();
@@ -361,7 +370,7 @@ exports.verifyParentByToken = async (req, res) => {
     try {
       const activityLogRef = firestore.collection('admin_activity_logs').doc('global');
       const activitySnap = await activityLogRef.get();
-      const existing = activitySnap.exists ? (Array.isArray(activitySnap.data()?.items) ? activitySnap.data().items : []) : [];
+      const existing = docExists(activitySnap) ? (Array.isArray(activitySnap.data()?.items) ? activitySnap.data().items : []) : [];
       const parentName = [parentData.firstName, parentData.lastName].filter(Boolean).join(' ').trim() || parentData.email || 'Parent';
       const newItem = {
         id: `parent_verified_${parentId}_${Date.now()}`,
@@ -457,7 +466,7 @@ exports.verifyStudentByToken = async (req, res) => {
     try {
       const activityRef = firestore.collection('admin_activity_logs').doc('global');
       const activitySnap = await activityRef.get();
-      const items = activitySnap.exists()
+      const items = docExists(activitySnap)
         ? (Array.isArray(activitySnap.data()?.items) ? activitySnap.data().items : [])
         : [];
       const id = `student_verified_${studentId}_${Date.now()}`;
