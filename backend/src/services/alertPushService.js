@@ -18,6 +18,64 @@ let alertListeners = {
 // Track which alerts we've already notified about (prevent duplicates)
 const notifiedAlerts = new Map(); // Key: `${alertId}_${userId}`, Value: timestamp
 
+const normalizeId = (v) => String(v || '').replace(/-/g, '').trim().toLowerCase();
+
+const isUnlinkAlertType = (alert) => {
+  const t = String(alert?.type || alert?.alertType || '').toLowerCase();
+  const id = String(alert?.id || alert?.alertId || '').toLowerCase();
+  return t.includes('unlink') || t.includes('unlinked') || id.includes('unlink') || id.includes('unlinked');
+};
+
+const shouldNotifyLinkedParentsForStudentAlert = (alert) => {
+  const t = String(alert?.type || alert?.alertType || '').toLowerCase();
+  // Safety-first: only fan out to parents for known "parent relevant" events.
+  // Everything else is student-only to prevent cross-student notification leaks.
+  const allow = [
+    'attendance_scan',
+    'schedule_permission_request',
+    'schedule_added',
+    'schedule_updated',
+    'schedule_deleted',
+    'schedule_current',
+    'link_request',
+  ];
+  return allow.includes(t);
+};
+
+async function clearInvalidTokenForUser({ userId, role, token, linkDocId }) {
+  try {
+    if (!token) return;
+    if (userId) {
+      const userRef = firestore.collection('users').doc(String(userId));
+      const updates = {};
+      // Clear only the stored fcmToken if it matches the failing token.
+      // We avoid clearing unrelated tokens.
+      const snap = await userRef.get();
+      if (snap.exists) {
+        const data = snap.data() || {};
+        if (String(data.fcmToken || '').trim() === String(token || '').trim()) {
+          updates.fcmToken = null;
+        }
+      }
+      if (Object.keys(updates).length > 0) {
+        await userRef.set(updates, { merge: true });
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to clear invalid user fcmToken (non-blocking):', e?.message);
+  }
+  try {
+    // Also clear from link document if we know it (helps with parent link token fallback)
+    if (linkDocId) {
+      const ref = firestore.collection('parent_student_links').doc(String(linkDocId));
+      const field = String(role || '').toLowerCase() === 'student' ? 'studentFcmToken' : 'parentFcmToken';
+      await ref.set({ [field]: null }, { merge: true });
+    }
+  } catch (e) {
+    console.warn('Failed to clear invalid link fcmToken (non-blocking):', e?.message);
+  }
+}
+
 /**
  * CRITICAL: Verify user is logged in and active
  * Returns true only if user has required fields (role, uid) and logged in within 12 HOURS
@@ -225,10 +283,13 @@ const sendPushForAlert = async (alert, role, userId) => {
     } else if (role === 'parent') {
       const alertParentId = alert.parentId || alert.parent_id;
       if (alertParentId) {
-        const normalizedAlertParentId = String(alertParentId).replace(/-/g, '').trim().toLowerCase();
-        const normalizedUserId = String(userId).replace(/-/g, '').trim().toLowerCase();
-        if (normalizedAlertParentId !== normalizedUserId) {
-          console.log(`⏭️ [${role}] SKIP - alert parentId (${alertParentId}) doesn't match userId (${userId})`);
+        const nAlert = normalizeId(alertParentId);
+        const nUserId = normalizeId(userId);
+        const nUserUid = normalizeId(userData.uid);
+        const nUserParentId = normalizeId(userData.parentId || userData.parentIdNumber || '');
+        const matches = nAlert === nUserId || (nUserUid && nAlert === nUserUid) || (nUserParentId && nAlert === nUserParentId);
+        if (!matches) {
+          console.log(`⏭️ [${role}] SKIP - alert parentId (${alertParentId}) doesn't match userId (${userId}) or uid/parentId`);
           return;
         }
       }
@@ -239,6 +300,13 @@ const sendPushForAlert = async (alert, role, userId) => {
         console.log(`⏭️ [${role}] SKIP - parent alert has no studentId (cannot verify link)`);
         return;
       }
+
+      // Unlink alerts must notify the parent even though the link may already be removed.
+      if (isUnlinkAlertType(alert)) {
+        // Allow sending without active-link verification.
+        // Still restricted by parentId match above + logged-in checks.
+        console.log(`ℹ️ [${role}] Unlink alert detected - bypassing active link check for parent ${userId}`);
+      } else {
       
       // Try to find active link
       let linkFound = false;
@@ -318,6 +386,7 @@ const sendPushForAlert = async (alert, role, userId) => {
           return;
         }
       }
+      } // end non-unlink branch
     }
     
     // ALL VALIDATIONS PASSED - Send notification
@@ -378,11 +447,12 @@ const sendPushForAlert = async (alert, role, userId) => {
       return;
     }
     
-    await pushService.sendPush(
-      fcmTokenToUse,
-      title,
-      body,
-      {
+    try {
+      await pushService.sendPush(
+        fcmTokenToUse,
+        title,
+        body,
+        {
         type: 'alert',
         alertId: alertId,
         alertType: alert.type || alert.alertType,
@@ -394,8 +464,14 @@ const sendPushForAlert = async (alert, role, userId) => {
         userFirstName: userData.firstName,
         userLastName: userData.lastName,
         ...alert
+        }
+      );
+    } catch (e) {
+      if (e?.isInvalidToken) {
+        await clearInvalidTokenForUser({ userId, role, token: fcmTokenToUse });
       }
-    );
+      throw e;
+    }
     
     notifiedAlerts.set(deduplicationKey, Date.now());
     console.log(`✅✅✅ PUSH SENT to ${role} ${userId} (${userData.uid}) - ${title}`);
@@ -602,6 +678,9 @@ const initializeStudentAlertsListener = () => {
                   console.log(`⏭️ [LISTENER] SKIP - already notified student ${studentId} about alert ${alertId}`);
                 }
               } catch (pushError) {
+                if (pushError?.isInvalidToken) {
+                  await clearInvalidTokenForUser({ userId: studentId, role: 'student', token: studentFcmToken });
+                }
                 console.error(`❌ Push failed for student ${studentId}:`, pushError.message);
               }
             } else {
@@ -624,6 +703,10 @@ const initializeStudentAlertsListener = () => {
           }
           
           // Now send push notifications to linked parents (if any)
+          if (!shouldNotifyLinkedParentsForStudentAlert(alert)) {
+            console.log(`⏭️ [LISTENER] Student alert type "${alertType}" is student-only - skipping parent notifications`);
+            continue;
+          }
           if (linkedParents.length === 0) {
             console.log(`⏭️ [LISTENER] No active parent links found for student ${studentId} - skipping parent notifications`);
             continue;
@@ -715,6 +798,9 @@ const initializeStudentAlertsListener = () => {
               notifiedAlerts.set(deduplicationKey, Date.now());
               console.log(`✅✅✅ PUSH SENT to parent ${parentId} (${parentData.uid}) - ${title}`);
             } catch (pushError) {
+              if (pushError?.isInvalidToken) {
+                await clearInvalidTokenForUser({ userId: parentId, role: 'parent', token: fcmTokenToUse, linkDocId: parentLink?.linkDoc?.id });
+              }
               console.error(`❌ Push failed for parent ${parentId}:`, pushError.message);
             }
           }
@@ -775,16 +861,9 @@ const initializeParentAlertsListener = () => {
         
         // CRITICAL: Process each alert with strict validation
         for (const alert of newAlerts) {
-          // CRITICAL: Verify alert's parentId matches document ID FIRST
-          const alertParentId = alert.parentId || alert.parent_id;
-          if (alertParentId) {
-            const normalizedAlertParentId = String(alertParentId).replace(/-/g, '').trim().toLowerCase();
-            const normalizedParentId = String(parentId).replace(/-/g, '').trim().toLowerCase();
-            if (normalizedAlertParentId !== normalizedParentId) {
-              console.log(`⏭️ [LISTENER] SKIP - alert parentId (${alertParentId}) doesn't match document ID (${parentId})`);
-              continue;
-            }
-          } else {
+          // CRITICAL: Do NOT hard-skip here: alert.parentId may be canonical parentId OR parent Firebase UID.
+          // We validate after fetching the user doc (sendPushForAlert handles both cases).
+          if (!(alert.parentId || alert.parent_id)) {
             alert.parentId = parentId;
           }
           
@@ -850,7 +929,7 @@ const initializeAdminAlertsListener = () => {
     const items = Array.isArray(snap.data()?.items) ? snap.data().items : [];
     const currentAlertIds = new Set();
     
-    // Find new unread alerts - CRITICAL: Filter out parent/student alerts BUT allow qr_request
+    // Find new unread alerts - CRITICAL: Filter out parent/student alerts BUT allow qr_request + verification-pending types
     const newAlerts = items.filter(item => {
       const alertId = item.id || item.alertId;
       if (item.status !== 'unread' || !alertId || previousAdminAlertIds.has(alertId)) {
@@ -862,13 +941,14 @@ const initializeAdminAlertsListener = () => {
       const hasParentId = !!(item.parentId || item.parent_id);
       const hasStudentId = !!(item.studentId || item.student_id);
       
-      // SPECIAL CASE: qr_request and student_verification_pending alerts can have studentId (they're FROM students TO admins)
-      // These are exceptions - they are admin alerts even if they have studentId
+      // SPECIAL CASE: qr_request and *_verification_pending alerts can have studentId/parentId (they're FROM users TO admins)
+      // These are exceptions - they are admin alerts even if they include studentId/parentId
       const isQrRequest = alertType.toLowerCase() === 'qr_request';
       const isStudentVerification = alertType.toLowerCase() === 'student_verification_pending';
+      const isParentVerification = alertType.toLowerCase() === 'parent_verification_pending';
       
       // For non-exception alerts, reject if they have parentId or studentId
-      if (!isQrRequest && !isStudentVerification && (hasParentId || hasStudentId)) {
+      if (!isQrRequest && !isStudentVerification && !isParentVerification && (hasParentId || hasStudentId)) {
         console.log(`⏭️ [ADMIN LISTENER] SKIP - alert ${alertId} has parentId (${hasParentId}) or studentId (${hasStudentId})`);
         return false;
       }
@@ -880,8 +960,8 @@ const initializeAdminAlertsListener = () => {
       ];
       const isParentStudentType = parentStudentAlertTypes.some(t => alertType.toLowerCase().includes(t.toLowerCase()));
       
-      // Allow qr_request and student_verification_pending even if they're in the list (they're exceptions)
-      if (isParentStudentType && !isQrRequest && !isStudentVerification) {
+      // Allow qr_request and *_verification_pending even if they're in the list (they're exceptions)
+      if (isParentStudentType && !isQrRequest && !isStudentVerification && !isParentVerification) {
         console.log(`⏭️ [ADMIN LISTENER] SKIP - alert ${alertId} type "${alertType}" is a parent/student alert type`);
         return false;
       }
@@ -1298,6 +1378,9 @@ const initializeConversationMessagesListener = () => {
                 notifiedAlerts.set(deduplicationKey, Date.now());
                 console.log(`✅✅✅ MESSAGE PUSH SENT to ${recipientRole} ${recipientId} (${recipientData.uid}) - ${title}`);
               } catch (error) {
+                if (error?.isInvalidToken) {
+                  await clearInvalidTokenForUser({ userId: recipientId, role: recipientRole, token: fcmTokenToUse });
+                }
                 console.error(`❌ Error processing message notification for conversation ${conversationId}:`, error.message);
               }
             }

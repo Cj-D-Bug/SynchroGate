@@ -4,6 +4,14 @@ const { generateQRCodeImage } = require('../utils/generateQR');
 const { env } = require('../config/env');
 const pushService = require('../services/pushService');
 
+const sendMailWithTimeout = async (transporter, mailOptions, timeoutMs = 3000) => {
+  if (!transporter?.sendMail) throw new Error('Invalid transporter');
+  return await Promise.race([
+    transporter.sendMail(mailOptions),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Connection timeout')), timeoutMs)),
+  ]);
+};
+
 exports.getUsers = async (req, res) => {
   try {
     const usersSnapshot = await firestore.collection('users').get();
@@ -122,18 +130,19 @@ exports.sendParentVerificationEmail = async (req, res) => {
           port: Number(env.SMTP_PORT) || 587,
           secure: env.SMTP_SECURE === 'true',
           auth: { user: env.SMTP_USER, pass: env.SMTP_PASS },
-          connectionTimeout: 10000,
-          greetingTimeout: 10000,
-          socketTimeout: 15000,
+          // Keep transport timeouts tight so the API doesn't "hang" in poor SMTP conditions.
+          connectionTimeout: 5000,
+          greetingTimeout: 5000,
+          socketTimeout: 5000,
         });
         const parentName = [parentData.firstName, parentData.lastName].filter(Boolean).join(' ').trim() || 'Parent';
-        await transporter.sendMail({
+        await sendMailWithTimeout(transporter, {
           from: env.SMTP_FROM || env.SMTP_USER,
           to: email,
           subject: 'SyncroGate – Verify your parent account',
           text: `Hello ${parentName},\n\nAn administrator has requested that you verify your parent account. Tap the link below to verify and start using the parent dashboard:\n\n${verificationUrl}\n\nThis link expires in 24 hours. If you did not request this, you can ignore this email.\n\n— SyncroGate`,
           html: `<p>Hello ${parentName},</p><p>An administrator has requested that you verify your parent account. Tap the link below to verify and start using the parent dashboard:</p><p><a href="${verificationUrl}">${verificationUrl}</a></p><p>This link expires in 24 hours. If you did not request this, you can ignore this email.</p><p>— SyncroGate</p>`,
-        });
+        }, 3000);
         emailSent = true;
       } catch (mailErr) {
         console.error('Parent verification email send failed:', mailErr.message);
@@ -237,18 +246,18 @@ exports.sendStudentVerificationEmail = async (req, res) => {
           port: Number(env.SMTP_PORT) || 587,
           secure: env.SMTP_SECURE === 'true',
           auth: { user: env.SMTP_USER, pass: env.SMTP_PASS },
-          connectionTimeout: 10000,
-          greetingTimeout: 10000,
-          socketTimeout: 15000,
+          connectionTimeout: 5000,
+          greetingTimeout: 5000,
+          socketTimeout: 5000,
         });
         const studentName = [studentData.firstName, studentData.lastName].filter(Boolean).join(' ').trim() || 'Student';
-        await transporter.sendMail({
+        await sendMailWithTimeout(transporter, {
           from: env.SMTP_FROM || env.SMTP_USER,
           to: email,
           subject: 'SyncroGate – Verify your student account',
           text: `Hello ${studentName},\n\nAn administrator has requested that you verify your student account. Tap the link below to verify and start using the student dashboard:\n\n${verificationUrl}\n\nThis link expires in 24 hours. If you did not request this, you can ignore this email.\n\n— SyncroGate`,
           html: `<p>Hello ${studentName},</p><p>An administrator has requested that you verify your student account. Tap the link below to verify and start using the student dashboard:</p><p><a href="${verificationUrl}">${verificationUrl}</a></p><p>This link expires in 24 hours. If you did not request this, you can ignore this email.</p><p>— SyncroGate</p>`,
-        });
+        }, 3000);
         emailSent = true;
       } catch (mailErr) {
         console.error('Student verification email send failed (non-blocking):', mailErr.message);

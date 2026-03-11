@@ -8,6 +8,21 @@ function isExpoPushToken(token) {
   return token.trim().startsWith('ExponentPushToken');
 }
 
+function getFcmErrorCode(err) {
+  // firebase-admin errors often expose code like "messaging/registration-token-not-registered"
+  return err?.errorInfo?.code || err?.code || err?.message || null;
+}
+
+function isInvalidRegistrationTokenError(err) {
+  const code = String(getFcmErrorCode(err) || '').toLowerCase();
+  return (
+    code.includes('registration-token-not-registered') ||
+    code.includes('invalid-registration-token') ||
+    code.includes('notregistered') ||
+    code.includes('invalidargument')
+  );
+}
+
 async function sendExpoPushNotification(expoPushToken, title, body, data = {}) {
   if (!expoPushToken || typeof expoPushToken !== 'string' || expoPushToken.trim().length === 0) {
     throw new Error('Invalid Expo push token provided');
@@ -139,7 +154,11 @@ const sendPushNotification = async (fcmToken, title, body, data = {}) => {
     console.log('✅ FCM push sent:', response);
     return { success: true, provider: 'fcm', messageId: response, token };
   } catch (err) {
-    console.error('❌ FCM push failed:', err.message);
+    const code = getFcmErrorCode(err);
+    console.error('❌ FCM push failed:', code || err.message);
+    if (isInvalidRegistrationTokenError(err)) {
+      err.isInvalidToken = true;
+    }
     throw err;
   }
 };
