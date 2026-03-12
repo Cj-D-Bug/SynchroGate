@@ -5,6 +5,8 @@ const { firestore, admin } = require('../config/firebase');
 const pushService = require('./pushService');
 const { getLinkFcmTokens } = require('../utils/linkFcmTokenHelper');
 
+const FieldValue = admin.firestore.FieldValue;
+
 let alertListeners = {
   student: null,
   parent: null,
@@ -149,6 +151,44 @@ if (!lastLoginAt) {
   console.log(`✅ isUserLoggedIn: APPROVED - user is actively logged in (logged in ${hoursSinceLogin}h ${minutesSinceLogin}m ago)`);
   return true;
 };
+
+/**
+ * Get all linked parent document IDs (canonical) for a student.
+ * Used to fan out attendance_scan alerts to every linked parent.
+ * @param {string} studentId - Student ID (document ID in users or studentIdNumber)
+ * @returns {Promise<string[]>} Array of parent document IDs (e.g. "9759-68433")
+ */
+async function getLinkedParentIdsForStudent(studentId) {
+  const parentIds = new Set();
+  if (!studentId) return [];
+  try {
+    const linksQuery1 = await firestore.collection('parent_student_links')
+      .where('studentId', '==', String(studentId))
+      .where('status', '==', 'active')
+      .get();
+    linksQuery1.docs.forEach(doc => {
+      const d = doc.data();
+      const pid = (d.parentIdNumber && String(d.parentIdNumber).includes('-'))
+        ? d.parentIdNumber
+        : (d.parentIdNumber || d.parentId);
+      if (pid) parentIds.add(String(pid));
+    });
+    const linksQuery2 = await firestore.collection('parent_student_links')
+      .where('studentIdNumber', '==', String(studentId))
+      .where('status', '==', 'active')
+      .get();
+    linksQuery2.docs.forEach(doc => {
+      const d = doc.data();
+      const pid = (d.parentIdNumber && String(d.parentIdNumber).includes('-'))
+        ? d.parentIdNumber
+        : (d.parentIdNumber || d.parentId);
+      if (pid) parentIds.add(String(pid));
+    });
+  } catch (e) {
+    console.error('getLinkedParentIdsForStudent error:', e?.message);
+  }
+  return Array.from(parentIds);
+}
 
 /**
  * Send push notification for an alert - ULTRA-STRICT VALIDATION
@@ -895,6 +935,33 @@ const initializeParentAlertsListener = () => {
           
           console.log(`✅ [LISTENER] User ${parentId} VERIFIED - proceeding to sendPushForAlert`);
           await sendPushForAlert(alert, 'parent', parentId);
+
+          // CRITICAL: For attendance_scan, fan out to ALL linked parents so every linked parent
+          // receives the alert in their feed and gets a push notification (not just the one whose doc was updated first).
+          const isAttendanceScan = (alert.type === 'attendance_scan' || alert.alertType === 'attendance_scan');
+          const alertStudentId = alert.studentId || alert.student_id;
+          if (isAttendanceScan && alertStudentId) {
+            const linkedParentIds = await getLinkedParentIdsForStudent(alertStudentId);
+            const currentParentIdNorm = normalizeId(parentId);
+            for (const otherParentId of linkedParentIds) {
+              if (normalizeId(otherParentId) === currentParentIdNorm) continue; // already processed
+              try {
+                const alertForOther = { ...alert, parentId: otherParentId };
+                const otherRef = firestore.collection('parent_alerts').doc(String(otherParentId));
+                // Use set+merge so doc is created if missing; arrayUnion appends to items
+                await otherRef.set(
+                  { items: FieldValue.arrayUnion(alertForOther) },
+                  { merge: true }
+                );
+                console.log(`✅ [LISTENER] Fanned out attendance_scan to parent ${otherParentId}`);
+                // Push will be sent when the listener sees the modified document for otherParentId.
+                // Send push now so they get it immediately (listener may dedupe).
+                await sendPushForAlert(alertForOther, 'parent', otherParentId);
+              } catch (fanOutErr) {
+                console.warn(`Fan-out to parent ${otherParentId} failed:`, fanOutErr?.message);
+              }
+            }
+          }
         }
       }
     }
