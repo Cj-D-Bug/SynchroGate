@@ -44,7 +44,6 @@ const shouldNotifyLinkedParentsForStudentAlert = (alert) => {
     'schedule_updated',
     'schedule_deleted',
     'schedule_current',
-    'link_request',
   ];
   return allow.includes(t);
 };
