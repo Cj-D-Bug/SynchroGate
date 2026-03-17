@@ -1,5 +1,6 @@
 const admin = require("firebase-admin");
 const sessionService = require("../services/sessionService");
+const { admin: firebaseAdmin } = require("../config/firebase");
 
 // Firestore reference
 const db = admin.firestore();
@@ -250,6 +251,9 @@ exports.login = async (req, res) => {
     const fcmToken = bodyFcmToken || req.body.fcmToken;
     if (fcmToken && typeof fcmToken === 'string' && fcmToken.trim().length > 0) {
       updateData.fcmToken = fcmToken.trim();
+      // Multi-device: keep an array of tokens so multiple devices receive pushes.
+      // Keep fcmToken as "last seen" token for backwards compatibility.
+      updateData.fcmTokens = firebaseAdmin.firestore.FieldValue.arrayUnion(fcmToken.trim());
       updateData.pushTokenUpdatedAt = now;
     }
 
@@ -319,20 +323,27 @@ exports.logout = async (req, res) => {
     
     console.log(`🔓 [LOGOUT] User found - ID: ${documentId}, Role: ${userRole}, Name: ${fullName}`);
 
-    // Delete the session
-    await sessionService.deleteSession(documentId);
+    // Delete the session for THIS device only
+    const deviceId = sessionService.getDeviceId(req);
+    await sessionService.deleteSession(documentId, deviceId);
 
-    // Clear login timestamp and FCM token from the document named parentId/studentId/Admin
+    // Clear login timestamp + legacy single-token ONLY if no active sessions remain.
+    // This is required for multi-device parent accounts (logout from one device must not stop pushes for the other).
     const usersDocId = getUsersDocId(userData, documentId);
     try {
-      await db.collection("users").doc(usersDocId).update({
-        lastLoginAt: admin.firestore.FieldValue.delete(),
-        fcmToken: admin.firestore.FieldValue.delete(),
-        pushTokenUpdatedAt: admin.firestore.FieldValue.delete(),
-      });
-      console.log(`✅ [LOGOUT] lastLoginAt and FCM token cleared for user ${usersDocId}`);
+      const remainingSessions = await sessionService.countActiveSessions(documentId);
+      if (remainingSessions <= 0) {
+        await db.collection("users").doc(usersDocId).update({
+          lastLoginAt: admin.firestore.FieldValue.delete(),
+          fcmToken: admin.firestore.FieldValue.delete(),
+          pushTokenUpdatedAt: admin.firestore.FieldValue.delete(),
+        });
+        console.log(`✅ [LOGOUT] lastLoginAt and legacy fcmToken cleared for user ${usersDocId} (no sessions remaining)`);
+      } else {
+        console.log(`ℹ️ [LOGOUT] Not clearing users/${usersDocId} login fields; ${remainingSessions} session(s) still active for this account`);
+      }
     } catch (clearErr) {
-      console.warn('⚠️ [LOGOUT] Failed to clear FCM token (non-blocking):', clearErr?.message);
+      console.warn('⚠️ [LOGOUT] Failed to clear login fields (non-blocking):', clearErr?.message);
     }
 
     console.log(`✅ ========== LOGGED OUT SUCCESSFULLY ==========`);

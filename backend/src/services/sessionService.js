@@ -1,12 +1,23 @@
 // sessionService.js - Backend service to track active user sessions and enforce one device per user and one user per role
 const { firestore, admin } = require('../config/firebase');
 
-// In-memory cache for active sessions (userId -> { deviceId, loginTime, lastActivity, role })
+// In-memory cache for active sessions (sessionKey -> { deviceId, loginTime, lastActivity, role })
+// sessionKey is `${userId}__${deviceKey}`
 const activeSessions = new Map();
 
 // Firestore collection name for sessions and users
 const SESSIONS_COLLECTION = 'user_sessions';
 const USERS_COLLECTION = 'users';
+
+const normalizeSessionKeyPart = (v) => String(v || '')
+  .replace(/[^a-zA-Z0-9_\-]/g, '_')
+  .substring(0, 180);
+
+const getSessionDocId = (userId, deviceId) => {
+  const uid = normalizeSessionKeyPart(userId);
+  const did = normalizeSessionKeyPart(deviceId);
+  return `${uid}__${did}`;
+};
 
 /**
  * Get or create a device ID from request headers
@@ -84,100 +95,169 @@ const checkActiveSession = async (userId, usersDocId) => {
   const loginCheckDocId = usersDocId != null && usersDocId !== '' ? usersDocId : userId;
   try {
     const clearStaleSession = async () => {
-      activeSessions.delete(userId);
       try {
-        await firestore.collection(SESSIONS_COLLECTION).doc(userId).delete();
-        console.log(`✅ [SESSION] Cleared stale session for user ${userId} (users/${loginCheckDocId} has no lastLoginAt)`);
+        // Clear ALL sessions for this user (stale = user doc says logged out)
+        const snap = await firestore.collection(SESSIONS_COLLECTION).where('userId', '==', userId).get();
+        const batch = firestore.batch();
+        snap.docs.forEach((d) => {
+          batch.delete(d.ref);
+          activeSessions.delete(d.id);
+        });
+        if (!snap.empty) await batch.commit();
+        console.log(`✅ [SESSION] Cleared stale session(s) for user ${userId} (users/${loginCheckDocId} has no lastLoginAt)`);
       } catch (e) {
         console.warn('⚠️ [SESSION] Failed to delete stale session doc:', e?.message);
       }
     };
 
-    // Check in-memory cache first
-    const cachedSession = activeSessions.get(userId);
-    if (cachedSession) {
-      // Verify session still exists in Firestore
-      const sessionDoc = await firestore
-        .collection(SESSIONS_COLLECTION)
-        .doc(userId)
-        .get();
-      
-      if (sessionDoc.exists) {
-        const sessionData = sessionDoc.data();
-        // Check if session is still valid (not expired)
-        const lastActivity = sessionData.lastActivity?.toDate?.() || new Date(sessionData.lastActivity);
-        const sessionTimeout = 24 * 60 * 60 * 1000; // 24 hours
-        const isExpired = Date.now() - lastActivity.getTime() > sessionTimeout;
-        
-        if (!isExpired) {
-          const stillLoggedIn = await isUserDocLoggedIn(loginCheckDocId);
-          if (!stillLoggedIn) {
-            await clearStaleSession();
-            return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null, existingDeviceModel: null };
-          }
-          return {
-            hasActiveSession: true,
-            existingDeviceId: sessionData.deviceId,
-            existingDeviceModel: sessionData.deviceModel || null,
-            loginTime: sessionData.loginTime,
-            role: sessionData.role,
-            existingUserId: userId,
-          };
-        } else {
-          // Session expired, remove from cache
-          activeSessions.delete(userId);
-        }
-      } else {
-        // Session doesn't exist in Firestore, remove from cache
-        activeSessions.delete(userId);
-      }
-    }
-
-    // Check Firestore
-    const sessionDoc = await firestore
+    // Check Firestore: any active session for this user
+    const sessionsSnapshot = await firestore
       .collection(SESSIONS_COLLECTION)
-      .doc(userId)
+      .where('userId', '==', userId)
       .get();
 
-    if (sessionDoc.exists) {
-      const sessionData = sessionDoc.data();
-      const lastActivity = sessionData.lastActivity?.toDate?.() || new Date(sessionData.lastActivity);
-      const sessionTimeout = 24 * 60 * 60 * 1000; // 24 hours
-      const isExpired = Date.now() - lastActivity.getTime() > sessionTimeout;
+    if (sessionsSnapshot.empty) {
+      return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null, existingDeviceModel: null };
+    }
 
-      if (!isExpired) {
-        const stillLoggedIn = await isUserDocLoggedIn(loginCheckDocId);
-        if (!stillLoggedIn) {
-          await clearStaleSession();
-          return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null, existingDeviceModel: null };
-        }
-        // Update cache
-        activeSessions.set(userId, {
-          deviceId: sessionData.deviceId,
-          deviceModel: sessionData.deviceModel,
-          loginTime: sessionData.loginTime,
-          lastActivity: lastActivity,
-          role: sessionData.role,
-        });
-        return {
-          hasActiveSession: true,
-          existingDeviceId: sessionData.deviceId,
-          existingDeviceModel: sessionData.deviceModel || null,
-          loginTime: sessionData.loginTime,
-          role: sessionData.role,
-          existingUserId: userId,
-        };
-      } else {
-        // Expired session, delete it
-        await firestore.collection(SESSIONS_COLLECTION).doc(userId).delete();
-        activeSessions.delete(userId);
+    const sessionTimeout = 24 * 60 * 60 * 1000; // 24 hours
+    const now = Date.now();
+    let newest = null;
+    const expired = [];
+
+    for (const d of sessionsSnapshot.docs) {
+      const sessionData = d.data() || {};
+      const lastActivity = sessionData.lastActivity?.toDate?.() || new Date(sessionData.lastActivity);
+      const isExpired = now - lastActivity.getTime() > sessionTimeout;
+      if (isExpired) {
+        expired.push(d);
+        continue;
+      }
+      if (!newest) newest = { doc: d, data: sessionData, lastActivity };
+      else {
+        const prevLast = newest.lastActivity?.getTime?.() || 0;
+        if (lastActivity.getTime() > prevLast) newest = { doc: d, data: sessionData, lastActivity };
       }
     }
 
-    return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null, existingDeviceModel: null };
+    // Cleanup expired sessions (best effort)
+    if (expired.length > 0) {
+      try {
+        const batch = firestore.batch();
+        expired.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+        expired.forEach((d) => activeSessions.delete(d.id));
+      } catch (_) {}
+    }
+
+    if (!newest) {
+      return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null, existingDeviceModel: null };
+    }
+
+    const stillLoggedIn = await isUserDocLoggedIn(loginCheckDocId);
+    if (!stillLoggedIn) {
+      await clearStaleSession();
+      return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null, existingDeviceModel: null };
+    }
+
+    // Update cache for newest session
+    activeSessions.set(newest.doc.id, {
+      deviceId: newest.data.deviceId,
+      deviceModel: newest.data.deviceModel,
+      loginTime: newest.data.loginTime,
+      lastActivity: newest.lastActivity,
+      role: newest.data.role,
+    });
+
+    return {
+      hasActiveSession: true,
+      existingDeviceId: newest.data.deviceId,
+      existingDeviceModel: newest.data.deviceModel || null,
+      loginTime: newest.data.loginTime,
+      role: newest.data.role,
+      existingUserId: userId,
+    };
   } catch (error) {
     console.error('❌ Error checking active session:', error);
     return { hasActiveSession: false, existingDeviceId: null, role: null, existingUserId: null, existingDeviceModel: null };
+  }
+};
+
+/**
+ * Check whether a specific device has an active session for the user.
+ * Used by auth middleware to allow multi-device parents.
+ */
+const checkActiveSessionForDevice = async (userId, deviceId, usersDocId) => {
+  const loginCheckDocId = usersDocId != null && usersDocId !== '' ? usersDocId : userId;
+  try {
+    const docId = getSessionDocId(userId, deviceId);
+    const sessionDoc = await firestore.collection(SESSIONS_COLLECTION).doc(docId).get();
+    if (!sessionDoc.exists) {
+      return { hasActiveSession: false, existingDeviceId: null, existingDeviceModel: null, role: null, existingUserId: null };
+    }
+    const sessionData = sessionDoc.data() || {};
+    const lastActivity = sessionData.lastActivity?.toDate?.() || new Date(sessionData.lastActivity);
+    const sessionTimeout = 24 * 60 * 60 * 1000;
+    const isExpired = Date.now() - lastActivity.getTime() > sessionTimeout;
+    if (isExpired) {
+      try { await sessionDoc.ref.delete(); } catch {}
+      activeSessions.delete(docId);
+      return { hasActiveSession: false, existingDeviceId: null, existingDeviceModel: null, role: null, existingUserId: null };
+    }
+    const stillLoggedIn = await isUserDocLoggedIn(loginCheckDocId);
+    if (!stillLoggedIn) {
+      // If user doc says logged out, treat as no session (and cleanup)
+      try {
+        const snap = await firestore.collection(SESSIONS_COLLECTION).where('userId', '==', userId).get();
+        const batch = firestore.batch();
+        snap.docs.forEach((d) => { batch.delete(d.ref); activeSessions.delete(d.id); });
+        if (!snap.empty) await batch.commit();
+      } catch {}
+      return { hasActiveSession: false, existingDeviceId: null, existingDeviceModel: null, role: null, existingUserId: null };
+    }
+    return {
+      hasActiveSession: true,
+      existingDeviceId: sessionData.deviceId,
+      existingDeviceModel: sessionData.deviceModel || null,
+      loginTime: sessionData.loginTime,
+      role: sessionData.role,
+      existingUserId: userId,
+    };
+  } catch (e) {
+    console.error('❌ Error checking session for device:', e);
+    return { hasActiveSession: false, existingDeviceId: null, existingDeviceModel: null, role: null, existingUserId: null };
+  }
+};
+
+const countActiveSessions = async (userId) => {
+  try {
+    const sessionsSnapshot = await firestore
+      .collection(SESSIONS_COLLECTION)
+      .where('userId', '==', userId)
+      .get();
+    if (sessionsSnapshot.empty) return 0;
+    const sessionTimeout = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    let count = 0;
+    const expired = [];
+    for (const d of sessionsSnapshot.docs) {
+      const data = d.data() || {};
+      const lastActivity = data.lastActivity?.toDate?.() || new Date(data.lastActivity);
+      const isExpired = now - lastActivity.getTime() > sessionTimeout;
+      if (isExpired) expired.push(d);
+      else count += 1;
+    }
+    if (expired.length > 0) {
+      try {
+        const batch = firestore.batch();
+        expired.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+        expired.forEach((d) => activeSessions.delete(d.id));
+      } catch {}
+    }
+    return count;
+  } catch {
+    return 0;
   }
 };
 
@@ -198,10 +278,11 @@ const createSession = async (userId, deviceId, role, deviceModel) => {
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
-    await firestore.collection(SESSIONS_COLLECTION).doc(userId).set(sessionData, { merge: true });
+    const docId = getSessionDocId(userId, deviceId);
+    await firestore.collection(SESSIONS_COLLECTION).doc(docId).set(sessionData, { merge: true });
 
     // Update cache
-    activeSessions.set(userId, {
+    activeSessions.set(getSessionDocId(userId, deviceId), {
       deviceId,
       deviceModel: sessionData.deviceModel,
       loginTime: now,
@@ -222,25 +303,25 @@ const createSession = async (userId, deviceId, role, deviceModel) => {
  */
 const updateActivity = async (userId) => {
   try {
-    const sessionDoc = await firestore
+    // Legacy: updateActivity is called with userId only; update the most recently active session doc.
+    const sessionsSnapshot = await firestore
       .collection(SESSIONS_COLLECTION)
-      .doc(userId)
+      .where('userId', '==', userId)
       .get();
-
-    if (sessionDoc.exists) {
-      await firestore
-        .collection(SESSIONS_COLLECTION)
-        .doc(userId)
-        .update({
-          lastActivity: admin.firestore.FieldValue.serverTimestamp(),
-        });
-
-      // Update cache
-      const cached = activeSessions.get(userId);
-      if (cached) {
-        cached.lastActivity = new Date();
-        activeSessions.set(userId, cached);
-      }
+    if (sessionsSnapshot.empty) return;
+    let newest = null;
+    for (const d of sessionsSnapshot.docs) {
+      const data = d.data() || {};
+      const lastActivity = data.lastActivity?.toDate?.() || new Date(data.lastActivity);
+      if (!newest) newest = { doc: d, lastActivity };
+      else if (lastActivity.getTime() > newest.lastActivity.getTime()) newest = { doc: d, lastActivity };
+    }
+    if (!newest) return;
+    await newest.doc.ref.update({ lastActivity: admin.firestore.FieldValue.serverTimestamp() });
+    const cached = activeSessions.get(newest.doc.id);
+    if (cached) {
+      cached.lastActivity = new Date();
+      activeSessions.set(newest.doc.id, cached);
     }
   } catch (error) {
     console.error('❌ Error updating session activity:', error);
@@ -250,11 +331,21 @@ const updateActivity = async (userId) => {
 /**
  * Delete a user session (logout)
  */
-const deleteSession = async (userId) => {
+const deleteSession = async (userId, deviceId) => {
   try {
-    await firestore.collection(SESSIONS_COLLECTION).doc(userId).delete();
-    activeSessions.delete(userId);
-    console.log(`✅ Session deleted for user ${userId}`);
+    if (deviceId) {
+      const docId = getSessionDocId(userId, deviceId);
+      await firestore.collection(SESSIONS_COLLECTION).doc(docId).delete();
+      activeSessions.delete(docId);
+      console.log(`✅ Session deleted for user ${userId} (device ${String(deviceId).substring(0, 40)}...)`);
+    } else {
+      // Backward-compat: delete all sessions for this user
+      const snap = await firestore.collection(SESSIONS_COLLECTION).where('userId', '==', userId).get();
+      const batch = firestore.batch();
+      snap.docs.forEach((d) => { batch.delete(d.ref); activeSessions.delete(d.id); });
+      if (!snap.empty) await batch.commit();
+      console.log(`✅ Session(s) deleted for user ${userId}`);
+    }
   } catch (error) {
     console.error('❌ Error deleting session:', error);
   }
@@ -568,6 +659,8 @@ const cleanupListener = () => {
 module.exports = {
   getDeviceId,
   checkActiveSession,
+  checkActiveSessionForDevice,
+  countActiveSessions,
   checkActiveSessionByRole,
   createSession,
   updateActivity,

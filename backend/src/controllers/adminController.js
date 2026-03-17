@@ -162,17 +162,21 @@ exports.sendParentVerificationEmail = async (req, res) => {
 
     // Best-effort: send push notification to parent that verification link is ready
     try {
+      const parentTokens = Array.isArray(parentData.fcmTokens) ? parentData.fcmTokens : [];
       const parentFcm = String(parentData.fcmToken || '').trim();
-      if (parentFcm) {
+      const tokensToSend = parentTokens.length > 0 ? parentTokens.map(t => String(t || '').trim()).filter(Boolean) : (parentFcm ? [parentFcm] : []);
+      if (tokensToSend.length > 0) {
         const parentName = [parentData.firstName, parentData.lastName].filter(Boolean).join(' ').trim() || 'Parent';
         const title = 'Parent verification link sent';
         const body = `An admin sent your verification link. Open SyncroGate and tap "Verify now" to activate your account.`;
-        await pushService.sendPush(parentFcm, title, body, {
-          type: 'parent_verification_sent',
-          parentId,
-          email,
-          parentName,
-        });
+        for (const t of tokensToSend) {
+          await pushService.sendPush(t, title, body, {
+            type: 'parent_verification_sent',
+            parentId,
+            email,
+            parentName,
+          });
+        }
       }
     } catch (e) {
       console.warn('Failed to send parent verification push (non-blocking):', e?.message);
@@ -277,17 +281,21 @@ exports.sendStudentVerificationEmail = async (req, res) => {
 
     // Best-effort: send push notification to student that verification link is ready
     try {
+      const studentTokens = Array.isArray(studentData.fcmTokens) ? studentData.fcmTokens : [];
       const studentFcm = String(studentData.fcmToken || '').trim();
-      if (studentFcm) {
+      const tokensToSend = studentTokens.length > 0 ? studentTokens.map(t => String(t || '').trim()).filter(Boolean) : (studentFcm ? [studentFcm] : []);
+      if (tokensToSend.length > 0) {
         const studentName = [studentData.firstName, studentData.lastName].filter(Boolean).join(' ').trim() || 'Student';
         const title = 'Student verification link sent';
         const body = `An admin sent your verification link. Open SyncroGate and tap the verification link in your pending dashboard to activate your account.`;
-        await pushService.sendPush(studentFcm, title, body, {
-          type: 'student_verification_sent',
-          studentId,
-          email,
-          studentName,
-        });
+        for (const t of tokensToSend) {
+          await pushService.sendPush(t, title, body, {
+            type: 'student_verification_sent',
+            studentId,
+            email,
+            studentName,
+          });
+        }
       }
     } catch (e) {
       console.warn('Failed to send student verification push (non-blocking):', e?.message);

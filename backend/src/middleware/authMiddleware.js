@@ -55,7 +55,7 @@ module.exports = async function authMiddleware(req, res, next) {
     const isAdminOrDeveloper = role === 'admin' || role === 'developer';
     if (documentId && !isAdminOrDeveloper) {
       const deviceId = sessionService.getDeviceId(req);
-      const sessionCheck = await sessionService.checkActiveSession(documentId);
+      const sessionCheck = await sessionService.checkActiveSessionForDevice(documentId, deviceId);
       
       if (!sessionCheck.hasActiveSession) {
         // No active session - user needs to login
@@ -64,14 +64,7 @@ module.exports = async function authMiddleware(req, res, next) {
           message: "Unauthorized: No active session. Please log in again." 
         });
       }
-      
-      if (sessionCheck.existingDeviceId !== deviceId) {
-        // User is trying to access from a different device than the one they're logged in on
-        console.log(`⚠️ Unauthorized access attempt: User ${documentId} trying to access from device ${deviceId}, but logged in on ${sessionCheck.existingDeviceId}`);
-        return res.status(401).json({ 
-          message: "Unauthorized: You are logged in on another device. Please log out from that device first." 
-        });
-      }
+
       // When session has deviceModel, require X-Device-Model header to match (same deviceId can collide for different devices on same network)
       const sessionDeviceModel = sessionCheck.existingDeviceModel && String(sessionCheck.existingDeviceModel).trim();
       const headerDeviceModel = req.headers['x-device-model'] && String(req.headers['x-device-model']).trim();

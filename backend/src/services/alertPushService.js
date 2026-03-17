@@ -62,6 +62,12 @@ async function clearInvalidTokenForUser({ userId, role, token, linkDocId }) {
         if (String(data.fcmToken || '').trim() === String(token || '').trim()) {
           updates.fcmToken = null;
         }
+        // Also remove from multi-token array, if present
+        const arr = Array.isArray(data.fcmTokens) ? data.fcmTokens : [];
+        const filtered = arr.filter((t) => String(t || '').trim() !== String(token || '').trim());
+        if (filtered.length !== arr.length) {
+          updates.fcmTokens = filtered;
+        }
       }
       if (Object.keys(updates).length > 0) {
         await userRef.set(updates, { merge: true });
@@ -437,11 +443,15 @@ const sendPushForAlert = async (alert, role, userId) => {
     const title = alert.title || 'New Alert';
     const body = alert.message || alert.body || 'You have a new alert';
     
-    // Check for FCM token - try user document first, then check links for parents
+    // Check for FCM token(s) - prefer multi-token array, fallback to single token and then links for parents.
+    const userTokens = Array.isArray(userData.fcmTokens)
+      ? userData.fcmTokens.map(t => (t && typeof t === 'string' ? t.trim() : '')).filter(Boolean)
+      : [];
+    let fcmTokensToUse = userTokens.length > 0 ? userTokens : [];
     let fcmTokenToUse = userData.fcmToken;
     
-    // For parents, check parent_student_links for FCM token as fallback
-    if (!fcmTokenToUse && role === 'parent') {
+    // For parents, check parent_student_links for FCM token as fallback (single token)
+    if ((!fcmTokenToUse && fcmTokensToUse.length === 0) && role === 'parent') {
       const alertStudentId = alert.studentId || alert.student_id;
       if (alertStudentId) {
         try {
@@ -486,30 +496,43 @@ const sendPushForAlert = async (alert, role, userId) => {
       }
     }
     
-    if (!fcmTokenToUse) {
+    if (fcmTokensToUse.length === 0 && fcmTokenToUse) {
+      fcmTokensToUse = [String(fcmTokenToUse).trim()].filter(Boolean);
+    }
+
+    if (fcmTokensToUse.length === 0) {
       console.log(`⏭️ [${role}] SKIP - user ${userId} has no FCM token (checked user document${role === 'parent' ? ' and parent_student_links' : ''})`);
       return;
     }
     
     try {
-      await pushService.sendPush(
-        fcmTokenToUse,
-        title,
-        body,
-        {
-        type: 'alert',
-        alertId: alertId,
-        alertType: alert.type || alert.alertType,
-        studentId: alert.studentId || '',
-        parentId: alert.parentId || '',
-        status: alert.status || 'unread',
-        userUid: userData.uid,
-        userEmail: userData.email,
-        userFirstName: userData.firstName,
-        userLastName: userData.lastName,
-        ...alert
+      // Send to every token (supports mix of Expo + FCM tokens via pushService.sendPush)
+      for (const token of fcmTokensToUse) {
+        try {
+          await pushService.sendPush(
+            token,
+            title,
+            body,
+            {
+              type: 'alert',
+              alertId: alertId,
+              alertType: alert.type || alert.alertType,
+              studentId: alert.studentId || '',
+              parentId: alert.parentId || '',
+              status: alert.status || 'unread',
+              userUid: userData.uid,
+              userEmail: userData.email,
+              userFirstName: userData.firstName,
+              userLastName: userData.lastName,
+              ...alert
+            }
+          );
+        } catch (e) {
+          if (e?.isInvalidToken) {
+            await clearInvalidTokenForUser({ userId, role, token });
+          }
         }
-      );
+      }
     } catch (e) {
       if (e?.isInvalidToken) {
         await clearInvalidTokenForUser({ userId, role, token: fcmTokenToUse });
